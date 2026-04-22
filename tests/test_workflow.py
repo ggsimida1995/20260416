@@ -86,6 +86,7 @@ def test_run_workflow_processes_one_project_and_writes_error_on_failure(tmp_path
     assert result.failed_count == 1
     assert result.appended_count == 0
     assert result.success_project_codes == []
+    assert result.error_project_codes == ["BHE-25030367/01"]
     assert result.success_workbook_path == file_root / "success" / "2026年关闭满意度回访表0331.xlsx"
     assert result.error_report_paths == [file_root / "error" / "BHE-25030367-01.txt"]
     assert (file_root / "error" / "BHE-25030367-01.txt").exists()
@@ -190,6 +191,7 @@ def test_apply_prepared_result_records_duplicate_and_writes_error_report(monkeyp
     assert result.failed_count == 0
     assert result.success_project_names == []
     assert result.success_project_codes == []
+    assert result.error_project_codes == ["BHE-25030367/01"]
     assert result.error_report_paths == [error_root / "BHE-25030367-01.txt"]
     assert "[BHE-25030367/01------------开始------BHE-25030367/01]" in messages
     assert "[写入成功台账] 检测到重复项目编码，跳过追加" in messages

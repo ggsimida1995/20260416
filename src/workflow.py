@@ -168,6 +168,7 @@ def run_batch_workflow(
     result.compare_failed_count = compare_result.failed_count
     result.log_path = compare_result.log_path
     result.compare_success_project_codes = list(compare_result.success_project_codes)
+    result.compare_error_project_codes = list(compare_result.error_project_codes)
     result.compare_success_workbook_path = compare_result.success_workbook_path
     result.compare_error_report_paths = list(compare_result.error_report_paths)
     if log_callback is not None:
@@ -312,6 +313,7 @@ def _apply_prepared_result(
 
     if prepared.status in {"missing_files", "compare_failed"}:
         error_path = _write_prepared_error_report(logger, error_root, prepared.project_name, prepared.failures)
+        result.error_project_codes.append(prepared.project_code)
         result.error_report_paths.append(error_path)
         _log_project_end(logger, prepared.project_code)
         result.failed_count += 1
@@ -326,6 +328,7 @@ def _apply_prepared_result(
             prepared.project_name,
             _build_duplicate_failures(prepared.success_row),
         )
+        result.error_project_codes.append(prepared.project_code)
         result.error_report_paths.append(error_path)
         _log_project_end(logger, prepared.project_code)
         result.duplicate_count += 1

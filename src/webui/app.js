@@ -96,6 +96,7 @@ const appBridge = {
   syncOutputs(outputs) {
     const successWorkbookPath = outputs.successWorkbookPath || '';
     const successProjectCodes = Array.isArray(outputs.successProjectCodes) ? outputs.successProjectCodes : [];
+    const errorProjectCodes = Array.isArray(outputs.errorProjectCodes) ? outputs.errorProjectCodes : [];
     const errorReportPaths = Array.isArray(outputs.errorReportPaths) ? outputs.errorReportPaths : [];
     const updatedAt = outputs.updatedAt || '';
     const mode = outputs.mode || '';
@@ -128,18 +129,18 @@ const appBridge = {
     }
     this.setBadge('successWorkbookBadge', successCount > 0 ? `已追加 ${successCount}` : '未追加', successCount > 0 ? 'success' : 'idle');
 
-    const errorReportList = document.getElementById('errorReportList');
-    if (errorReportPaths.length === 0) {
-      errorReportList.classList.add('empty');
-      errorReportList.textContent = duplicateCount > 0 || failedCount > 0 ? '本次应有失败结果，但未拿到文件路径' : '暂无失败 txt';
+    const errorProjectCodeList = document.getElementById('errorProjectCodeList');
+    if (errorProjectCodes.length === 0) {
+      errorProjectCodeList.classList.add('empty');
+      errorProjectCodeList.textContent = duplicateCount > 0 || failedCount > 0 ? '本次应有失败项目，但未拿到项目编号' : '暂无失败项目编号';
     } else {
-      errorReportList.classList.remove('empty');
-      errorReportList.innerHTML = errorReportPaths.slice(0, 5).map((path, index) => {
-        const escaped = this.escapeHtml(path);
+      errorProjectCodeList.classList.remove('empty');
+      errorProjectCodeList.innerHTML = errorProjectCodes.slice(0, 12).map((code, index) => {
+        const escaped = this.escapeHtml(code);
         return `<div class="output-item"><span class="output-item-index">${index + 1}.</span><span>${escaped}</span></div>`;
       }).join('');
     }
-    const errorCount = errorReportPaths.length || failedCount || duplicateCount;
+    const errorCount = errorProjectCodes.length || errorReportPaths.length || failedCount || duplicateCount;
     this.setBadge('errorReportBadge', `${errorCount} 个`, errorCount > 0 ? 'warning' : 'idle');
 
     document.getElementById('openSuccessWorkbookButton').disabled = !successWorkbookPath;

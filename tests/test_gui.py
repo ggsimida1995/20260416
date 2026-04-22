@@ -530,6 +530,7 @@ def test_webview_api_run_action_sync_compare_updates_logs_and_status(tmp_path: P
             failed_count=0,
             log_path=tmp_path / "error" / "logs" / "workflow.txt",
             success_project_codes=["BHE-25030367/01", "BHE-25030368/01"],
+            error_project_codes=["BHE-25030369/01"],
             success_workbook_path=tmp_path / "success" / "2026年关闭满意度回访表0331.xlsx",
             error_report_paths=[tmp_path / "error" / "项目A.txt"],
         )
@@ -548,6 +549,7 @@ def test_webview_api_run_action_sync_compare_updates_logs_and_status(tmp_path: P
     assert with_time("[运行] 本地比对完成: 追加成功=2 | 重复跳过=1 | 失败=0") in api.logs
     assert api.output_summary["successWorkbookPath"] == str(tmp_path / "success" / "2026年关闭满意度回访表0331.xlsx")
     assert api.output_summary["successProjectCodes"] == ["BHE-25030367/01", "BHE-25030368/01"]
+    assert api.output_summary["errorProjectCodes"] == ["BHE-25030369/01"]
     assert api.output_summary["errorReportPaths"] == [str(tmp_path / "error" / "项目A.txt")]
     assert api.output_summary["logPath"] == str(tmp_path / "error" / "logs" / "workflow.txt")
 
@@ -565,6 +567,7 @@ def test_webview_api_run_action_sync_batch_updates_logs_and_status(tmp_path: Pat
             cleaned_count=1,
             log_path=tmp_path / "error" / "logs" / "workflow.txt",
             compare_success_project_codes=["BHE-25030367/01"],
+            compare_error_project_codes=["BHE-25030370/01"],
             compare_success_workbook_path=tmp_path / "success" / "2026年关闭满意度回访表0331.xlsx",
             compare_error_report_paths=[tmp_path / "error" / "项目B.txt"],
         )
@@ -582,6 +585,7 @@ def test_webview_api_run_action_sync_batch_updates_logs_and_status(tmp_path: Pat
     assert with_time("[运行] 批处理完成: 下载=1 | 追加成功=1 | 重复跳过=0 | 失败=0 | 清理成功=1") in api.logs
     assert api.output_summary["successWorkbookPath"] == str(tmp_path / "success" / "2026年关闭满意度回访表0331.xlsx")
     assert api.output_summary["successProjectCodes"] == ["BHE-25030367/01"]
+    assert api.output_summary["errorProjectCodes"] == ["BHE-25030370/01"]
     assert api.output_summary["errorReportPaths"] == [str(tmp_path / "error" / "项目B.txt")]
 
 
