@@ -15,6 +15,12 @@ const appBridge = {
     document.getElementById('chooseDirButton').addEventListener('click', () => this.chooseFileRoot());
     document.getElementById('openDirButton').addEventListener('click', () => this.callApi('open_file_root'));
     document.getElementById('openDirInlineButton').addEventListener('click', () => this.callApi('open_file_root'));
+    document.getElementById('openSuccessWorkbookButton').addEventListener('click', () => this.openOutputFile('successWorkbookPath'));
+    document.getElementById('openSuccessWorkbookDirButton').addEventListener('click', () => this.openOutputDir('successWorkbookPath', 'successDir'));
+    document.getElementById('openFirstErrorReportButton').addEventListener('click', () => this.openFirstErrorReport());
+    document.getElementById('openErrorDirButton').addEventListener('click', () => this.openOutputPathValue(this.state?.outputs?.errorDir || ''));
+    document.getElementById('openLogFileButton').addEventListener('click', () => this.openOutputFile('logPath'));
+    document.getElementById('openLogDirButton').addEventListener('click', () => this.openOutputDir('logPath', 'logDir'));
     document.getElementById('settingsModal').addEventListener('click', (event) => {
       if (event.target.id === 'settingsModal') {
         this.closeSettings();
@@ -49,6 +55,8 @@ const appBridge = {
       logOutput.textContent = state.logs.join('\n');
       logOutput.scrollTop = logOutput.scrollHeight;
     }
+
+    this.syncOutputs(state.outputs || {});
 
     const running = state.running;
     const busyState = state.busy || {
@@ -85,6 +93,109 @@ const appBridge = {
     if (this.modalOpen) {
       this.fillSettingsForm(state.settings);
     }
+  },
+
+  syncOutputs(outputs) {
+    const successWorkbookPath = outputs.successWorkbookPath || '';
+    const errorReportPaths = Array.isArray(outputs.errorReportPaths) ? outputs.errorReportPaths : [];
+    const logPath = outputs.logPath || '';
+    const updatedAt = outputs.updatedAt || '';
+    const mode = outputs.mode || '';
+    const successCount = Number(outputs.successCount || 0);
+    const duplicateCount = Number(outputs.duplicateCount || 0);
+    const failedCount = Number(outputs.failedCount || 0);
+
+    const outputMeta = document.getElementById('outputMeta');
+    if (!mode) {
+      outputMeta.innerText = '尚未生成比对结果';
+    } else {
+      const modeText = mode === 'batch' ? '最近一次批处理' : mode === 'compare' ? '最近一次本地比对' : '最近一次运行';
+      const parts = [modeText];
+      if (updatedAt) {
+        parts.push(updatedAt);
+      }
+      outputMeta.innerText = parts.join(' | ');
+    }
+
+    const successWorkbookPathEl = document.getElementById('successWorkbookPath');
+    successWorkbookPathEl.innerText = successWorkbookPath || '暂无文件';
+    successWorkbookPathEl.classList.toggle('empty', !successWorkbookPath);
+    this.setBadge('successWorkbookBadge', successCount > 0 ? `已追加 ${successCount}` : '未追加', successCount > 0 ? 'success' : 'idle');
+
+    const errorReportList = document.getElementById('errorReportList');
+    if (errorReportPaths.length === 0) {
+      errorReportList.classList.add('empty');
+      errorReportList.textContent = duplicateCount > 0 || failedCount > 0 ? '本次应有失败结果，但未拿到文件路径' : '暂无失败 txt';
+    } else {
+      errorReportList.classList.remove('empty');
+      errorReportList.innerHTML = errorReportPaths.slice(0, 5).map((path, index) => {
+        const escaped = this.escapeHtml(path);
+        return `<div class="output-item"><span class="output-item-index">${index + 1}.</span><span>${escaped}</span></div>`;
+      }).join('');
+    }
+    const errorCount = errorReportPaths.length || failedCount || duplicateCount;
+    this.setBadge('errorReportBadge', `${errorCount} 个`, errorCount > 0 ? 'warning' : 'idle');
+
+    const logFilePathEl = document.getElementById('logFilePath');
+    logFilePathEl.innerText = logPath || '暂无日志文件';
+    logFilePathEl.classList.toggle('empty', !logPath);
+    this.setBadge('logFileBadge', logPath ? '已生成' : '未生成', logPath ? 'success' : 'idle');
+
+    document.getElementById('openSuccessWorkbookButton').disabled = !successWorkbookPath;
+    document.getElementById('openSuccessWorkbookDirButton').disabled = !(successWorkbookPath || outputs.successDir);
+    document.getElementById('openFirstErrorReportButton').disabled = errorReportPaths.length === 0;
+    document.getElementById('openErrorDirButton').disabled = !(errorReportPaths.length > 0 || outputs.errorDir);
+    document.getElementById('openLogFileButton').disabled = !logPath;
+    document.getElementById('openLogDirButton').disabled = !(logPath || outputs.logDir);
+  },
+
+  setBadge(id, text, tone) {
+    const el = document.getElementById(id);
+    el.innerText = text;
+    el.className = `status-pill ${tone}`;
+  },
+
+  async openOutputFile(key) {
+    const path = this.state?.outputs?.[key] || '';
+    await this.openOutputPathValue(path);
+  },
+
+  async openOutputDir(pathKey, fallbackKey) {
+    const outputs = this.state?.outputs || {};
+    const filePath = outputs[pathKey] || '';
+    const fallbackPath = outputs[fallbackKey] || '';
+    if (filePath) {
+      await window.pywebview.api.open_parent_path(filePath);
+      return;
+    }
+    if (!fallbackPath) {
+      return;
+    }
+    await window.pywebview.api.open_path(fallbackPath);
+  },
+
+  async openFirstErrorReport() {
+    const paths = this.state?.outputs?.errorReportPaths || [];
+    if (paths.length === 0) {
+      return;
+    }
+    await this.openOutputPathValue(paths[0]);
+  },
+
+  async openOutputPathValue(path) {
+    if (!path) {
+      return;
+    }
+    await window.pywebview.api.open_path(path);
+  },
+
+  escapeHtml(value) {
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   },
 
   async callApi(method, ...args) {

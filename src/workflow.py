@@ -71,6 +71,7 @@ def run_compare_workflow(
     result = WorkflowResult()
     success_workbook_path = file_root / "success" / SUCCESS_WORKBOOK_PATH.name
     error_root = file_root / "error"
+    result.success_workbook_path = success_workbook_path
     target_project_dirs = project_dirs if project_dirs is not None else discover_projects(file_root)
 
     with RuntimeLogger(build_log_path(file_root), callback=log_callback) as logger:
@@ -166,6 +167,8 @@ def run_batch_workflow(
     result.compare_duplicate_count = compare_result.duplicate_count
     result.compare_failed_count = compare_result.failed_count
     result.log_path = compare_result.log_path
+    result.compare_success_workbook_path = compare_result.success_workbook_path
+    result.compare_error_report_paths = list(compare_result.error_report_paths)
     if log_callback is not None:
         log_callback(
             f"[本地比对阶段] 完成: 追加成功={result.compare_appended_count} | "
@@ -307,7 +310,8 @@ def _apply_prepared_result(
         logger.log(line)
 
     if prepared.status in {"missing_files", "compare_failed"}:
-        _write_prepared_error_report(logger, error_root, prepared.project_name, prepared.failures)
+        error_path = _write_prepared_error_report(logger, error_root, prepared.project_name, prepared.failures)
+        result.error_report_paths.append(error_path)
         _log_project_end(logger, prepared.project_code)
         result.failed_count += 1
         return
@@ -315,12 +319,13 @@ def _apply_prepared_result(
     append_result = append_success_row(success_workbook_path, prepared.success_row)
     if append_result.status == "duplicate":
         logger.log("[写入成功台账] 检测到重复项目编码，跳过追加")
-        _write_prepared_error_report(
+        error_path = _write_prepared_error_report(
             logger,
             error_root,
             prepared.project_name,
             _build_duplicate_failures(prepared.success_row),
         )
+        result.error_report_paths.append(error_path)
         _log_project_end(logger, prepared.project_code)
         result.duplicate_count += 1
         return

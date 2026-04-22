@@ -263,6 +263,16 @@ def _execute_action(
     log_callback: Callable[[str], None] | None,
 ) -> dict[str, Any]:
     session_result: SessionInspectionResult | None = None
+    output_payload = {
+        "mode": action,
+        "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "successWorkbookPath": "",
+        "errorReportPaths": [],
+        "logPath": "",
+        "successCount": 0,
+        "duplicateCount": 0,
+        "failedCount": 0,
+    }
 
     try:
         if action == "batch" and ai_settings.enabled and not is_remote_recognition_configured(ai_settings):
@@ -272,6 +282,7 @@ def _execute_action(
                 "status_text": "需配置 AI/OCR",
                 "status_tone": "warning",
                 "session_result": session_result,
+                "outputs": output_payload,
             }
 
         if action in {"batch", "download"}:
@@ -286,6 +297,7 @@ def _execute_action(
                     "status_text": f"{'批处理' if action == 'batch' else '下载'}前需先登录",
                     "status_tone": "warning",
                     "session_result": session_result,
+                    "outputs": output_payload,
                 }
 
         if action == "batch":
@@ -308,6 +320,15 @@ def _execute_action(
                 "status_text": "批处理完成",
                 "status_tone": "success",
                 "session_result": session_result,
+                "outputs": {
+                    **output_payload,
+                    "successWorkbookPath": str(result.compare_success_workbook_path) if result.compare_success_workbook_path else "",
+                    "errorReportPaths": [str(path) for path in result.compare_error_report_paths],
+                    "logPath": str(result.log_path) if result.log_path else "",
+                    "successCount": result.compare_appended_count,
+                    "duplicateCount": result.compare_duplicate_count,
+                    "failedCount": result.compare_failed_count,
+                },
             }
 
         if action == "download":
@@ -326,6 +347,7 @@ def _execute_action(
                 "status_text": "下载完成",
                 "status_tone": "success",
                 "session_result": session_result,
+                "outputs": output_payload,
             }
 
         if log_callback is not None:
@@ -345,6 +367,15 @@ def _execute_action(
             "status_text": "比对完成",
             "status_tone": "success",
             "session_result": session_result,
+            "outputs": {
+                **output_payload,
+                "successWorkbookPath": str(result.success_workbook_path) if result.success_workbook_path else "",
+                "errorReportPaths": [str(path) for path in result.error_report_paths],
+                "logPath": str(result.log_path) if result.log_path else "",
+                "successCount": result.appended_count,
+                "duplicateCount": result.duplicate_count,
+                "failedCount": result.failed_count,
+            },
         }
     except Exception as exc:
         if log_callback is not None:
@@ -353,6 +384,7 @@ def _execute_action(
             "status_text": "批处理失败" if action == "batch" else "下载失败" if action == "download" else "比对失败",
             "status_tone": "error",
             "session_result": session_result,
+            "outputs": output_payload,
         }
 
 
@@ -439,6 +471,7 @@ class WebviewApi:
         self.busy_title = ""
         self.busy_detail = ""
         self.action_process: Any | None = None
+        self.output_summary = self._empty_output_summary()
 
     def attach_window(self, window: Any) -> None:
         self.window = window
@@ -518,11 +551,26 @@ class WebviewApi:
         self._open_path(self._current_file_root())
         return True
 
+    def open_path(self, raw_path: str) -> bool:
+        if not raw_path:
+            return False
+        self._open_path(Path(raw_path))
+        return True
+
+    def open_parent_path(self, raw_path: str) -> bool:
+        if not raw_path:
+            return False
+        target = Path(raw_path)
+        parent = target if target.is_dir() else target.parent
+        self._open_path(parent)
+        return True
+
     def save_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
             if self._is_ui_busy():
                 return self._build_state()
             self.settings = self._build_settings_from_payload(payload)
+            self.output_summary = self._empty_output_summary()
             self._set_busy("settings", "正在保存设置", "检查资料目录并写入本地配置")
             return_state = self._build_state()
 
@@ -651,6 +699,9 @@ class WebviewApi:
                     session_result = payload.get("session_result")
                     if isinstance(session_result, SessionInspectionResult):
                         self.session_result = session_result
+                    outputs = payload.get("outputs")
+                    if isinstance(outputs, dict):
+                        self.output_summary = self._sanitize_output_summary(outputs)
                     self._set_status(
                         str(payload.get("status_text", "任务完成")),
                         str(payload.get("status_tone", "success")),
@@ -693,6 +744,9 @@ class WebviewApi:
                 session_result = result.get("session_result")
                 if isinstance(session_result, SessionInspectionResult):
                     self.session_result = session_result
+                outputs = result.get("outputs")
+                if isinstance(outputs, dict):
+                    self.output_summary = self._sanitize_output_summary(outputs)
                 self._set_status(
                     str(result.get("status_text", "任务完成")),
                     str(result.get("status_tone", "success")),
@@ -846,6 +900,54 @@ class WebviewApi:
     def _is_ui_busy(self) -> bool:
         return self.busy_operation != ""
 
+    def _empty_output_summary(self) -> dict[str, Any]:
+        return {
+            "mode": "",
+            "updatedAt": "",
+            "successWorkbookPath": "",
+            "errorReportPaths": [],
+            "logPath": "",
+            "successCount": 0,
+            "duplicateCount": 0,
+            "failedCount": 0,
+        }
+
+    def _sanitize_output_summary(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "mode": str(payload.get("mode", "") or ""),
+            "updatedAt": str(payload.get("updatedAt", "") or ""),
+            "successWorkbookPath": str(payload.get("successWorkbookPath", "") or ""),
+            "errorReportPaths": [
+                str(path)
+                for path in payload.get("errorReportPaths", [])
+                if isinstance(path, (str, Path)) and str(path)
+            ],
+            "logPath": str(payload.get("logPath", "") or ""),
+            "successCount": int(payload.get("successCount", 0) or 0),
+            "duplicateCount": int(payload.get("duplicateCount", 0) or 0),
+            "failedCount": int(payload.get("failedCount", 0) or 0),
+        }
+
+    def _build_outputs_state(self) -> dict[str, Any]:
+        file_root = self._current_file_root()
+        success_dir = file_root / "success"
+        error_dir = file_root / "error"
+        log_dir = error_dir / "logs"
+        summary = self.output_summary
+        return {
+            "mode": summary["mode"],
+            "updatedAt": summary["updatedAt"],
+            "successWorkbookPath": summary["successWorkbookPath"],
+            "successDir": str(success_dir),
+            "errorReportPaths": list(summary["errorReportPaths"]),
+            "errorDir": str(error_dir),
+            "logPath": summary["logPath"],
+            "logDir": str(log_dir),
+            "successCount": summary["successCount"],
+            "duplicateCount": summary["duplicateCount"],
+            "failedCount": summary["failedCount"],
+        }
+
     def _build_settings_from_payload(self, payload: dict[str, Any]) -> AppSettings:
         return AppSettings(
             username=self.settings.username,
@@ -894,6 +996,7 @@ class WebviewApi:
                     runtime_directory_check=self.runtime_directory_check,
                     file_root_check=self.file_root_check,
                 ),
+                "outputs": self._build_outputs_state(),
                 "session": self._build_session_state(),
                 "logs": list(self.logs),
                 "settings": self._build_settings_state(),

@@ -524,7 +524,14 @@ def test_webview_api_run_action_sync_compare_updates_logs_and_status(tmp_path: P
         assert file_root == tmp_path
         if log_callback is not None:
             log_callback("[运行] 本地比对完成")
-        return WorkflowResult(appended_count=2, duplicate_count=1, failed_count=0)
+        return WorkflowResult(
+            appended_count=2,
+            duplicate_count=1,
+            failed_count=0,
+            log_path=tmp_path / "error" / "logs" / "workflow.txt",
+            success_workbook_path=tmp_path / "success" / "2026年关闭满意度回访表0331.xlsx",
+            error_report_paths=[tmp_path / "error" / "项目A.txt"],
+        )
 
     api = WebviewApi(
         settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
@@ -538,6 +545,9 @@ def test_webview_api_run_action_sync_compare_updates_logs_and_status(tmp_path: P
     assert api.status_text == "比对完成"
     assert with_time("[运行] 本地比对完成") in api.logs
     assert with_time("[运行] 本地比对完成: 追加成功=2 | 重复跳过=1 | 失败=0") in api.logs
+    assert api.output_summary["successWorkbookPath"] == str(tmp_path / "success" / "2026年关闭满意度回访表0331.xlsx")
+    assert api.output_summary["errorReportPaths"] == [str(tmp_path / "error" / "项目A.txt")]
+    assert api.output_summary["logPath"] == str(tmp_path / "error" / "logs" / "workflow.txt")
 
 
 def test_webview_api_run_action_sync_batch_updates_logs_and_status(tmp_path: Path):
@@ -551,6 +561,9 @@ def test_webview_api_run_action_sync_batch_updates_logs_and_status(tmp_path: Pat
             compare_duplicate_count=0,
             compare_failed_count=0,
             cleaned_count=1,
+            log_path=tmp_path / "error" / "logs" / "workflow.txt",
+            compare_success_workbook_path=tmp_path / "success" / "2026年关闭满意度回访表0331.xlsx",
+            compare_error_report_paths=[tmp_path / "error" / "项目B.txt"],
         )
 
     api = WebviewApi(
@@ -564,6 +577,8 @@ def test_webview_api_run_action_sync_batch_updates_logs_and_status(tmp_path: Pat
 
     assert api.status_text == "批处理完成"
     assert with_time("[运行] 批处理完成: 下载=1 | 追加成功=1 | 重复跳过=0 | 失败=0 | 清理成功=1") in api.logs
+    assert api.output_summary["successWorkbookPath"] == str(tmp_path / "success" / "2026年关闭满意度回访表0331.xlsx")
+    assert api.output_summary["errorReportPaths"] == [str(tmp_path / "error" / "项目B.txt")]
 
 
 def test_run_gui_app_creates_window_and_starts_webview(monkeypatch):
