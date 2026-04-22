@@ -50,7 +50,7 @@ jobs:
         run: Copy-Item dist/ProjectFileCompare.exe "dist/ProjectFileCompare-${{ matrix.arch }}.exe"
 
       - name: Upload EXE
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ProjectFileCompare-exe-${{ matrix.arch }}
           path: dist/ProjectFileCompare-${{ matrix.arch }}.exe
@@ -65,7 +65,7 @@ jobs:
         run: build_installer.bat
 
       - name: Upload Installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ProjectFileCompare-installer-${{ matrix.arch }}
           path: |
