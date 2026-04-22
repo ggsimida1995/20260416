@@ -4,6 +4,27 @@
 #define MyAppExeName "ProjectFileCompare.exe"
 #define MyAppId "{{C8A34A8F-70C3-4AC6-9D1A-CE2399182FD2}"
 
+#ifndef MyAppArch
+  #define MyAppArch "x64"
+#endif
+
+#ifndef MyOutputBaseFilename
+  #define MyOutputBaseFilename "ProjectFileCompare-Setup-" + MyAppArch
+#endif
+
+#if MyAppArch == "x86"
+  #define MyArchitecturesAllowed "x86compatible"
+  #define MyArchitecturesInstallIn64BitMode ""
+#elif MyAppArch == "x64"
+  #define MyArchitecturesAllowed "x64compatible"
+  #define MyArchitecturesInstallIn64BitMode "x64compatible"
+#elif MyAppArch == "arm64"
+  #define MyArchitecturesAllowed "arm64"
+  #define MyArchitecturesInstallIn64BitMode "arm64"
+#else
+  #error Unsupported MyAppArch value
+#endif
+
 [Setup]
 AppId={#MyAppId}
 AppName={#MyAppName}
@@ -14,13 +35,15 @@ DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed={#MyArchitecturesAllowed}
+#if "" != MyArchitecturesInstallIn64BitMode
+ArchitecturesInstallIn64BitMode={#MyArchitecturesInstallIn64BitMode}
+#endif
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 OutputDir=Output
-OutputBaseFilename=ProjectFileCompare-Setup
+OutputBaseFilename={#MyOutputBaseFilename}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Languages]

@@ -29,6 +29,9 @@ build_exe.bat
 
 4. 打包定义固定在仓库内的 `ProjectFileCompare.spec`，`build_exe.bat` 只是一个包装入口。
 5. 产物位于 `dist\ProjectFileCompare.exe`。
+6. 如果要区分架构，先切到对应 Python 架构环境再打包：
+   `x86` 用 32 位 Python
+   `x64` 用 64 位 Python
 
 ## GitHub Actions 打包
 
@@ -38,8 +41,23 @@ build_exe.bat
 2. 打开 `Actions`。
 3. 运行 `Build Windows Package`。
 4. 构建完成后直接下载产物：
-   `ProjectFileCompare-exe`
-   `ProjectFileCompare-installer`
+   `ProjectFileCompare-exe-x86`
+   `ProjectFileCompare-exe-x64`
+   `ProjectFileCompare-installer-x86`
+   `ProjectFileCompare-installer-x64`
+
+## Windows ARM64
+
+当前仓库还不能稳定产出原生 `arm64` Windows 包。
+
+原因：
+- GitHub Actions 已支持 `windows-11-arm`
+- `actions/setup-python` 也支持 `arm64`
+- 但当前依赖里的 `PyMuPDF` 暂时没有可用的 `win_arm64` 轮子，原生 ARM 打包会在装依赖阶段失败
+
+如果要出原生 `arm64` 包，需要先处理这条依赖：
+- 换掉 `PyMuPDF`
+- 或者单独维护 ARM64 可安装方案
 
 ## Windows 安装包
 

@@ -8,9 +8,21 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86
+            runner: windows-latest
+            python_arch: x86
+          - arch: x64
+            runner: windows-latest
+            python_arch: x64
+    runs-on: ${{ matrix.runner }}
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      PFC_ARCH: ${{ matrix.arch }}
+      PFC_SKIP_EXE_BUILD: "1"
 
     steps:
       - name: Checkout
@@ -20,6 +32,7 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          architecture: ${{ matrix.python_arch }}
 
       - name: Install Dependencies
         shell: cmd
@@ -32,11 +45,15 @@ jobs:
         shell: cmd
         run: build_exe.bat
 
+      - name: Rename EXE
+        shell: powershell
+        run: Copy-Item dist/ProjectFileCompare.exe "dist/ProjectFileCompare-${{ matrix.arch }}.exe"
+
       - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:
-          name: ProjectFileCompare-exe
-          path: dist/ProjectFileCompare.exe
+          name: ProjectFileCompare-exe-${{ matrix.arch }}
+          path: dist/ProjectFileCompare-${{ matrix.arch }}.exe
           if-no-files-found: error
 
       - name: Install Inno Setup
@@ -50,8 +67,8 @@ jobs:
       - name: Upload Installer
         uses: actions/upload-artifact@v4
         with:
-          name: ProjectFileCompare-installer
+          name: ProjectFileCompare-installer-${{ matrix.arch }}
           path: |
-            Output/ProjectFileCompare-Setup.exe
-            installer/Output/ProjectFileCompare-Setup.exe
+            Output/ProjectFileCompare-Setup-${{ matrix.arch }}.exe
+            installer/Output/ProjectFileCompare-Setup-${{ matrix.arch }}.exe
           if-no-files-found: error

@@ -1,8 +1,13 @@
 @echo off
 setlocal
 
-call build_exe.bat
-if errorlevel 1 exit /b %errorlevel%
+set PFC_ARCH_VALUE=%PFC_ARCH%
+if "%PFC_ARCH_VALUE%"=="" set PFC_ARCH_VALUE=x64
+
+if not "%PFC_SKIP_EXE_BUILD%"=="1" (
+  call build_exe.bat
+  if errorlevel 1 exit /b %errorlevel%
+)
 
 set ISCC_CMD=
 where ISCC >nul 2>nul
@@ -16,4 +21,4 @@ if "%ISCC_CMD%"=="" (
   exit /b 1
 )
 
-"%ISCC_CMD%" installer\ProjectFileCompare.iss
+"%ISCC_CMD%" /DMyAppArch=%PFC_ARCH_VALUE% /DMyOutputBaseFilename=ProjectFileCompare-Setup-%PFC_ARCH_VALUE% installer\ProjectFileCompare.iss
