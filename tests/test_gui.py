@@ -192,6 +192,9 @@ def test_webview_api_bootstrap_can_defer_startup_checks(monkeypatch, tmp_path: P
     assert state["status"]["text"] == "启动检测中"
     assert state["status"]["tone"] == "running"
     assert state["startupLoading"] is True
+    assert state["busy"]["active"] is True
+    assert state["busy"]["kind"] == "startup"
+    assert state["busy"]["title"] == "正在后台检测环境和会话"
     assert state["logs"] == [with_time("[启动] 页面已打开，后台检测环境和会话")]
     assert len(started) == 1
     assert started[0][0] == api._run_startup_probe
@@ -213,8 +216,48 @@ def test_webview_api_choose_file_root_uses_window_dialog(tmp_path: Path):
     assert window.dialog_calls == [(gui_module.webview.FileDialog.FOLDER, str(tmp_path))]
 
 
-def test_webview_api_save_settings_persists_values(tmp_path: Path):
+def test_webview_api_refresh_session_can_defer_probe(monkeypatch, tmp_path: Path):
+    started = []
+
+    class FakeThread:
+        def __init__(self, *, target=None, args=(), daemon=None):
+            self.target = target
+            self.args = args
+            self.daemon = daemon
+
+        def start(self):
+            started.append((self.target, self.args, self.daemon))
+
+    api = WebviewApi(
+        settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
+        session_inspector=lambda **kwargs: (_ for _ in ()).throw(AssertionError("refresh should not block api call")),
+        log_time_provider=lambda: FIXED_LOG_TIME,
+    )
+    monkeypatch.setattr(gui_module.threading, "Thread", FakeThread)
+
+    state = api.refresh_session()
+
+    assert state["status"]["text"] == "刷新会话中"
+    assert state["busy"]["active"] is True
+    assert state["busy"]["kind"] == "session"
+    assert state["logs"] == [with_time("[会话] 开始刷新 Hollysys 会话")]
+    assert len(started) == 1
+    assert started[0][0] == api._run_refresh_session_sync
+
+
+def test_webview_api_save_settings_can_defer_persist(monkeypatch, tmp_path: Path):
     saved = {}
+    started = []
+
+    class FakeThread:
+        def __init__(self, *, target=None, args=(), daemon=None):
+            self.target = target
+            self.args = args
+            self.daemon = daemon
+
+        def start(self):
+            started.append((self.target, self.args, self.daemon))
+
     api = WebviewApi(
         settings_loader=lambda path: AppSettings(username="old-user", password="old-pass", last_file_root=str(tmp_path)),
         settings_saver=lambda path, username, password, last_file_root, ai_settings=None: saved.update(
@@ -229,6 +272,7 @@ def test_webview_api_save_settings_persists_values(tmp_path: Path):
         session_inspector=lambda **kwargs: ready_session_result(),
         log_time_provider=lambda: FIXED_LOG_TIME,
     )
+    monkeypatch.setattr(gui_module.threading, "Thread", FakeThread)
 
     state = api.save_settings(
         {
@@ -244,14 +288,23 @@ def test_webview_api_save_settings_persists_values(tmp_path: Path):
         }
     )
 
+    assert saved == {}
+    assert state["busy"]["active"] is True
+    assert state["busy"]["kind"] == "settings"
+    assert api.settings.username == "old-user"
+    assert state["settings"]["lastFileRoot"] == str(tmp_path / "new-root")
+    assert state["settings"]["requestTimeoutSeconds"] == 45
+    assert len(started) == 1
+    assert started[0][0] == api._run_save_settings_sync
+
+    api._run_save_settings_sync()
+
     assert saved["username"] == "old-user"
     assert saved["password"] == "old-pass"
     assert saved["last_file_root"] == str(tmp_path / "new-root")
     assert saved["ai_settings"].enabled is True
     assert saved["ai_settings"].ai_model == "vision-model"
-    assert state["settings"]["lastFileRoot"] == str(tmp_path / "new-root")
-    assert state["settings"]["requestTimeoutSeconds"] == 45
-    assert with_time("[设置] 已更新") in state["logs"]
+    assert with_time("[设置] 已更新") in api.logs
 
 
 def test_webview_api_handle_start_stop_requests_stop_when_running(tmp_path: Path):
@@ -269,22 +322,90 @@ def test_webview_api_handle_start_stop_requests_stop_when_running(tmp_path: Path
     assert with_time("[运行] 当前任务不支持立即停止，请等待当前步骤结束") in state["logs"]
 
 
-def test_webview_api_run_download_only_blocks_when_session_missing(tmp_path: Path):
+def test_webview_api_run_download_only_can_defer_preflight(monkeypatch, tmp_path: Path):
+    started = []
+
+    class FakeThread:
+        def __init__(self, *, target=None, args=(), daemon=None):
+            self.target = target
+            self.args = args
+            self.daemon = daemon
+
+        def start(self):
+            started.append((self.target, self.args, self.daemon))
+
+    api = WebviewApi(
+        settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
+        session_inspector=lambda **kwargs: (_ for _ in ()).throw(AssertionError("download preflight should not block api call")),
+        download_runner=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("download runner should not be called")),
+        log_time_provider=lambda: FIXED_LOG_TIME,
+    )
+    monkeypatch.setattr(gui_module.threading, "Thread", FakeThread)
+
+    state = api.run_download_only()
+
+    assert state["status"]["text"] == "下载准备中"
+    assert state["running"] is True
+    assert state["busy"]["active"] is True
+    assert state["busy"]["kind"] == "download"
+    assert with_time("[运行] 已接收下载任务，正在后台准备") in state["logs"]
+    assert len(started) == 1
+    assert started[0][0] == api._run_action_sync
+    assert started[0][1] == ("download",)
+
+
+def test_webview_api_start_batch_can_defer_preflight(monkeypatch, tmp_path: Path):
+    started = []
+
+    class FakeThread:
+        def __init__(self, *, target=None, args=(), daemon=None):
+            self.target = target
+            self.args = args
+            self.daemon = daemon
+
+        def start(self):
+            started.append((self.target, self.args, self.daemon))
+
+    monkeypatch.setattr(gui_module, "is_remote_recognition_configured", lambda settings: False)
+    api = WebviewApi(
+        settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path), ai=AISettings(enabled=True)),
+        session_inspector=lambda **kwargs: (_ for _ in ()).throw(AssertionError("batch preflight should not block api call")),
+        batch_runner=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("batch runner should not be called")),
+        log_time_provider=lambda: FIXED_LOG_TIME,
+    )
+    monkeypatch.setattr(gui_module.threading, "Thread", FakeThread)
+
+    state = api.start_batch()
+
+    assert state["status"]["text"] == "批处理准备中"
+    assert state["running"] is True
+    assert state["busy"]["active"] is True
+    assert state["busy"]["kind"] == "batch"
+    assert with_time("[运行] 已接收批处理任务，正在后台准备") in state["logs"]
+    assert len(started) == 1
+    assert started[0][0] == api._run_action_sync
+    assert started[0][1] == ("batch",)
+
+
+def test_webview_api_run_action_sync_download_sets_warning_when_session_missing(tmp_path: Path):
     api = WebviewApi(
         settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
         session_inspector=lambda **kwargs: missing_session_result(),
         download_runner=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("download runner should not be called")),
         log_time_provider=lambda: FIXED_LOG_TIME,
     )
+    api.active_task_name = "download"
+    api._set_busy("download", "正在准备下载任务", "先检查会话，再开始抓取 Hollysys 附件")
 
-    state = api.run_download_only()
+    api._run_action_sync("download")
 
-    assert state["status"]["text"] == "下载前需先登录"
-    assert state["running"] is False
-    assert with_time("[会话] 已找到 Chrome，但未发现 Hollysys 相关 Cookie。") in state["logs"]
+    assert api.status_text == "下载前需先登录"
+    assert api.active_task_name == ""
+    assert api.busy_operation == ""
+    assert with_time("[会话] 已找到 Chrome，但未发现 Hollysys 相关 Cookie。") in api.logs
 
 
-def test_webview_api_start_batch_requires_remote_recognition(monkeypatch, tmp_path: Path):
+def test_webview_api_run_action_sync_batch_requires_remote_recognition(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(gui_module, "is_remote_recognition_configured", lambda settings: False)
     api = WebviewApi(
         settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path), ai=AISettings(enabled=True)),
@@ -292,11 +413,15 @@ def test_webview_api_start_batch_requires_remote_recognition(monkeypatch, tmp_pa
         batch_runner=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("batch runner should not be called")),
         log_time_provider=lambda: FIXED_LOG_TIME,
     )
+    api.active_task_name = "batch"
+    api._set_busy("batch", "正在准备批处理", "先检查会话和识别配置，再进入下载 / 比对 / 清理")
 
-    state = api.start_batch()
+    api._run_action_sync("batch")
 
-    assert state["status"]["text"] == "需配置 AI/OCR"
-    assert with_time("[运行] 未配置 AI 或 OCR，请先在设置中完成至少一种识别配置") in state["logs"]
+    assert api.status_text == "需配置 AI/OCR"
+    assert api.active_task_name == ""
+    assert api.busy_operation == ""
+    assert with_time("[运行] 未配置 AI 或 OCR，请先在设置中完成至少一种识别配置") in api.logs
 
 
 def test_webview_api_run_action_sync_download_updates_logs_and_status(tmp_path: Path):

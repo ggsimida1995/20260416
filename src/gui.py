@@ -216,10 +216,13 @@ def _open_local_path(path: Path) -> None:
     if sys.platform == "win32":
         os.startfile(resolved)  # type: ignore[attr-defined]
         return
-    if sys.platform == "darwin":
-        subprocess.run(["open", resolved], check=False)
-        return
-    subprocess.run(["xdg-open", resolved], check=False)
+    command = ["open", resolved] if sys.platform == "darwin" else ["xdg-open", resolved]
+    subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 class WebviewApi:
@@ -274,6 +277,9 @@ class WebviewApi:
         self.startup_snapshot_logged = False
         self.startup_probe_started = False
         self.startup_probe_running = False
+        self.busy_operation = ""
+        self.busy_title = ""
+        self.busy_detail = ""
 
     def attach_window(self, window: Any) -> None:
         self.window = window
@@ -285,6 +291,7 @@ class WebviewApi:
                 if not self.startup_probe_started:
                     self.startup_probe_started = True
                     self.startup_probe_running = True
+                    self._set_busy("startup", "正在后台检测环境和会话", "页面已打开，请稍候几秒")
                     self._append_log("[启动] 页面已打开，后台检测环境和会话", push=False)
                     should_start = True
                 state = self._build_state()
@@ -319,8 +326,17 @@ class WebviewApi:
             return self._build_state()
 
     def refresh_session(self) -> dict[str, Any]:
-        self._inspect_session(log_result=True, push=False)
-        return self._build_state()
+        with self._lock:
+            if self._is_ui_busy():
+                return self._build_state()
+            self._set_busy("session", "正在刷新 Hollysys 会话", "读取本机 Chrome Cookie 并验证当前登录状态")
+            self._append_log("[会话] 开始刷新 Hollysys 会话", push=False)
+            self._set_status("刷新会话中", "running")
+            state = self._build_state()
+
+        worker = threading.Thread(target=self._run_refresh_session_sync, daemon=True)
+        worker.start()
+        return state
 
     def clear_logs(self) -> dict[str, Any]:
         with self._lock:
@@ -345,58 +361,36 @@ class WebviewApi:
 
     def save_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
-            self.settings = AppSettings(
-                username=self.settings.username,
-                password=self.settings.password,
-                last_file_root=str(payload.get("lastFileRoot", "") or str(FILE_ROOT)),
-                ai=AISettings(
-                    enabled=bool(payload.get("aiEnabled", False)),
-                    ai_base_url=str(payload.get("aiBaseUrl", "")),
-                    ai_api_key=str(payload.get("aiApiKey", "")),
-                    ai_model=str(payload.get("aiModel", "")),
-                    ocr_base_url=str(payload.get("ocrBaseUrl", "")),
-                    ocr_api_key=str(payload.get("ocrApiKey", "")),
-                    request_timeout_seconds=int(payload.get("requestTimeoutSeconds", 30) or 30),
-                    image_max_kb=int(payload.get("imageMaxKb", 100) or 100),
-                ),
-            )
-            self.file_root_check = _build_directory_check("资料目录", self._current_file_root())
-            self._persist_settings()
-            self._append_log("[设置] 已更新", push=False)
-            return self._build_state()
+            if self._is_ui_busy():
+                return self._build_state()
+            self.settings = self._build_settings_from_payload(payload)
+            self._set_busy("settings", "正在保存设置", "检查资料目录并写入本地配置")
+            return_state = self._build_state()
+
+        worker = threading.Thread(target=self._run_save_settings_sync, daemon=True)
+        worker.start()
+        return return_state
 
     def _launch_action(self, action: str) -> dict[str, Any]:
         with self._lock:
-            if self._is_running():
+            if self._is_ui_busy():
                 return self._build_state()
-
-        if action == "batch" and self.settings.ai.enabled and not is_remote_recognition_configured(self.settings.ai):
-            with self._lock:
-                self._append_log("[运行] 未配置 AI 或 OCR，请先在设置中完成至少一种识别配置", push=False)
-                self._set_status("需配置 AI/OCR", "warning")
-                return self._build_state()
-
-        if action in {"batch", "download"}:
-            result = self._inspect_session(log_result=False, push=False)
-            if result.status != "ready":
-                with self._lock:
-                    self._append_log(f"[会话] {result.detail}", push=False)
-                    self._set_status(f"{'批处理' if action == 'batch' else '下载'}前需先登录", "warning")
-                    return self._build_state()
 
         with self._lock:
             self.stop_requested = False
             self.active_task_name = action
-            self._persist_settings()
             if action == "batch":
-                self._append_log("[运行] 开始执行批处理", push=False)
-                self._set_status("批处理中", "running")
+                self._set_busy("batch", "正在准备批处理", "先检查会话和识别配置，再进入下载 / 比对 / 清理")
+                self._append_log("[运行] 已接收批处理任务，正在后台准备", push=False)
+                self._set_status("批处理准备中", "running")
             elif action == "download":
-                self._append_log("[运行] 开始下载 Hollysys 待办资料", push=False)
-                self._set_status("下载中", "running")
+                self._set_busy("download", "正在准备下载任务", "先检查会话，再开始抓取 Hollysys 附件")
+                self._append_log("[运行] 已接收下载任务，正在后台准备", push=False)
+                self._set_status("下载准备中", "running")
             else:
-                self._append_log("[运行] 开始执行文件比对", push=False)
-                self._set_status("比对中", "running")
+                self._set_busy("compare", "正在准备本地比对", "校验配置后开始读取本地文件")
+                self._append_log("[运行] 已接收本地比对任务，正在后台准备", push=False)
+                self._set_status("比对准备中", "running")
             state = self._build_state()
 
         worker = threading.Thread(target=self._run_action_sync, args=(action,), daemon=True)
@@ -406,6 +400,36 @@ class WebviewApi:
     def _run_action_sync(self, action: str) -> None:
         try:
             file_root = self._current_file_root()
+            if action == "batch" and self.settings.ai.enabled and not is_remote_recognition_configured(self.settings.ai):
+                with self._lock:
+                    self._append_log("[运行] 未配置 AI 或 OCR，请先在设置中完成至少一种识别配置", push=False)
+                    self._set_status("需配置 AI/OCR", "warning")
+                return
+
+            if action in {"batch", "download"}:
+                result = self._inspect_session(log_result=False, push=False)
+                if result.status != "ready":
+                    with self._lock:
+                        self._append_log(f"[会话] {result.detail}", push=False)
+                        self._set_status(f"{'批处理' if action == 'batch' else '下载'}前需先登录", "warning")
+                    return
+
+            with self._lock:
+                self._persist_settings()
+                if action == "batch":
+                    self._set_busy("batch", "批处理执行中", "正在下载 / 比对 / 清理项目资料")
+                    self._append_log("[运行] 开始执行批处理", push=False)
+                    self._set_status("批处理中", "running")
+                elif action == "download":
+                    self._set_busy("download", "下载任务执行中", "正在抓取 Hollysys 待办附件")
+                    self._append_log("[运行] 开始下载 Hollysys 待办资料", push=False)
+                    self._set_status("下载中", "running")
+                else:
+                    self._set_busy("compare", "本地比对执行中", "正在扫描目录并比对文件内容")
+                    self._append_log("[运行] 开始执行文件比对", push=False)
+                    self._set_status("比对中", "running")
+            self._push_state()
+
             if action == "batch":
                 result = self._batch_runner(
                     file_root=file_root,
@@ -459,12 +483,37 @@ class WebviewApi:
         finally:
             with self._lock:
                 self.active_task_name = ""
+                self._clear_busy(action)
             self._push_state()
 
     def _background_log(self, message: str) -> None:
         with self._lock:
             self._append_log(message, push=False)
         self._push_state()
+
+    def _run_refresh_session_sync(self) -> None:
+        try:
+            self._inspect_session(log_result=True, push=False)
+        finally:
+            with self._lock:
+                self._clear_busy("session")
+            self._push_state()
+
+    def _run_save_settings_sync(self) -> None:
+        try:
+            file_root_check = _build_directory_check("资料目录", self._current_file_root())
+            with self._lock:
+                self.file_root_check = file_root_check
+                self._persist_settings()
+            self._background_log("[设置] 已更新")
+        except Exception as exc:
+            self._background_log(f"[异常] 保存设置失败: {exc}")
+            with self._lock:
+                self._set_status("设置保存失败", "error")
+        finally:
+            with self._lock:
+                self._clear_busy("settings")
+            self._push_state()
 
     def _run_startup_probe(self) -> None:
         try:
@@ -482,6 +531,7 @@ class WebviewApi:
         finally:
             with self._lock:
                 self.startup_probe_running = False
+                self._clear_busy("startup")
             self._push_state()
 
     def _append_startup_snapshot_logs(self) -> None:
@@ -560,6 +610,18 @@ class WebviewApi:
         self.status_text = text
         self.status_tone = tone
 
+    def _set_busy(self, operation: str, title: str, detail: str) -> None:
+        self.busy_operation = operation
+        self.busy_title = title
+        self.busy_detail = detail
+
+    def _clear_busy(self, operation: str | None = None) -> None:
+        if operation is not None and self.busy_operation != operation:
+            return
+        self.busy_operation = ""
+        self.busy_title = ""
+        self.busy_detail = ""
+
     def _persist_settings(self) -> None:
         self._settings_saver(
             self.settings_path,
@@ -575,6 +637,26 @@ class WebviewApi:
     def _is_running(self) -> bool:
         return self.active_task_name != ""
 
+    def _is_ui_busy(self) -> bool:
+        return self.busy_operation != ""
+
+    def _build_settings_from_payload(self, payload: dict[str, Any]) -> AppSettings:
+        return AppSettings(
+            username=self.settings.username,
+            password=self.settings.password,
+            last_file_root=str(payload.get("lastFileRoot", "") or str(FILE_ROOT)),
+            ai=AISettings(
+                enabled=bool(payload.get("aiEnabled", False)),
+                ai_base_url=str(payload.get("aiBaseUrl", "")),
+                ai_api_key=str(payload.get("aiApiKey", "")),
+                ai_model=str(payload.get("aiModel", "")),
+                ocr_base_url=str(payload.get("ocrBaseUrl", "")),
+                ocr_api_key=str(payload.get("ocrApiKey", "")),
+                request_timeout_seconds=int(payload.get("requestTimeoutSeconds", 30) or 30),
+                image_max_kb=int(payload.get("imageMaxKb", 100) or 100),
+            ),
+        )
+
     def _build_state(self) -> dict[str, Any]:
         with self._lock:
             return {
@@ -589,6 +671,12 @@ class WebviewApi:
                 },
                 "running": self._is_running(),
                 "startupLoading": self.startup_probe_running,
+                "busy": {
+                    "active": self._is_ui_busy(),
+                    "kind": self.busy_operation,
+                    "title": self.busy_title,
+                    "detail": self.busy_detail,
+                },
                 "summary": {
                     "mode": "Chrome 本机会话直连 + 本地比对",
                     "directory": str(self._current_file_root()),

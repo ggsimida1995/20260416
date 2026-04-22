@@ -51,9 +51,17 @@ const appBridge = {
     }
 
     const running = state.running;
-    const startupLoading = Boolean(state.startupLoading);
-    const busy = running || startupLoading;
-    document.getElementById('startupStrip').classList.toggle('hidden', !startupLoading);
+    const busyState = state.busy || {
+      active: Boolean(state.startupLoading),
+      kind: state.startupLoading ? 'startup' : '',
+      title: '',
+      detail: ''
+    };
+    const busy = Boolean(busyState.active);
+    const startupLoading = busyState.kind === 'startup' || Boolean(state.startupLoading);
+    document.getElementById('busyStrip').classList.toggle('hidden', !busy);
+    document.getElementById('busyTitle').innerText = busyState.title || '正在处理中';
+    document.getElementById('busyDetail').innerText = busyState.detail || '请稍候';
     document.getElementById('startButtonLabel').innerText = startupLoading
       ? '启动检测中'
       : running
@@ -64,11 +72,15 @@ const appBridge = {
       : running
         ? '当前步骤结束后停止'
         : '下载 / 比对 / 清理';
-    document.getElementById('startButton').disabled = startupLoading;
+    document.getElementById('startButton').disabled = busy && !running;
     document.getElementById('downloadButton').disabled = busy;
     document.getElementById('compareButton').disabled = busy;
     document.getElementById('settingsButton').disabled = busy;
     document.getElementById('refreshSessionButton').disabled = busy;
+    document.getElementById('saveSettingsButton').disabled = busy;
+    document.getElementById('chooseDirButton').disabled = busy;
+    document.getElementById('openDirButton').disabled = busy;
+    document.getElementById('openDirInlineButton').disabled = busy;
 
     if (this.modalOpen) {
       this.fillSettingsForm(state.settings);
