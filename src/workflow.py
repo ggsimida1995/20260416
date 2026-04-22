@@ -167,6 +167,7 @@ def run_batch_workflow(
     result.compare_duplicate_count = compare_result.duplicate_count
     result.compare_failed_count = compare_result.failed_count
     result.log_path = compare_result.log_path
+    result.compare_success_project_codes = list(compare_result.success_project_codes)
     result.compare_success_workbook_path = compare_result.success_workbook_path
     result.compare_error_report_paths = list(compare_result.error_report_paths)
     if log_callback is not None:
@@ -336,6 +337,7 @@ def _apply_prepared_result(
     _log_project_end(logger, prepared.project_code)
     result.appended_count += 1
     result.success_project_names.append(prepared.project_name)
+    result.success_project_codes.append(prepared.project_code)
 
 
 def _resolve_worker_count(project_count: int) -> int:

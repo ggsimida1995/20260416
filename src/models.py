@@ -79,6 +79,7 @@ class WorkflowResult:
     failed_count: int = 0
     log_path: Optional[Path] = None
     success_project_names: list[str] = field(default_factory=list)
+    success_project_codes: list[str] = field(default_factory=list)
     success_workbook_path: Optional[Path] = None
     error_report_paths: list[Path] = field(default_factory=list)
 
@@ -98,5 +99,6 @@ class BatchWorkflowResult:
     compare_failed_count: int = 0
     cleaned_count: int = 0
     log_path: Optional[Path] = None
+    compare_success_project_codes: list[str] = field(default_factory=list)
     compare_success_workbook_path: Optional[Path] = None
     compare_error_report_paths: list[Path] = field(default_factory=list)

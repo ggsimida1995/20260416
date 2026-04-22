@@ -19,8 +19,6 @@ const appBridge = {
     document.getElementById('openSuccessWorkbookDirButton').addEventListener('click', () => this.openOutputDir('successWorkbookPath', 'successDir'));
     document.getElementById('openFirstErrorReportButton').addEventListener('click', () => this.openFirstErrorReport());
     document.getElementById('openErrorDirButton').addEventListener('click', () => this.openOutputPathValue(this.state?.outputs?.errorDir || ''));
-    document.getElementById('openLogFileButton').addEventListener('click', () => this.openOutputFile('logPath'));
-    document.getElementById('openLogDirButton').addEventListener('click', () => this.openOutputDir('logPath', 'logDir'));
     document.getElementById('settingsModal').addEventListener('click', (event) => {
       if (event.target.id === 'settingsModal') {
         this.closeSettings();
@@ -97,8 +95,8 @@ const appBridge = {
 
   syncOutputs(outputs) {
     const successWorkbookPath = outputs.successWorkbookPath || '';
+    const successProjectCodes = Array.isArray(outputs.successProjectCodes) ? outputs.successProjectCodes : [];
     const errorReportPaths = Array.isArray(outputs.errorReportPaths) ? outputs.errorReportPaths : [];
-    const logPath = outputs.logPath || '';
     const updatedAt = outputs.updatedAt || '';
     const mode = outputs.mode || '';
     const successCount = Number(outputs.successCount || 0);
@@ -117,9 +115,17 @@ const appBridge = {
       outputMeta.innerText = parts.join(' | ');
     }
 
-    const successWorkbookPathEl = document.getElementById('successWorkbookPath');
-    successWorkbookPathEl.innerText = successWorkbookPath || '暂无文件';
-    successWorkbookPathEl.classList.toggle('empty', !successWorkbookPath);
+    const successProjectCodeList = document.getElementById('successProjectCodeList');
+    if (successProjectCodes.length === 0) {
+      successProjectCodeList.classList.add('empty');
+      successProjectCodeList.textContent = successCount > 0 ? '本次已写入成功台账，但未拿到项目编号' : '暂无成功项目编号';
+    } else {
+      successProjectCodeList.classList.remove('empty');
+      successProjectCodeList.innerHTML = successProjectCodes.slice(0, 12).map((code, index) => {
+        const escaped = this.escapeHtml(code);
+        return `<div class="output-item"><span class="output-item-index">${index + 1}.</span><span>${escaped}</span></div>`;
+      }).join('');
+    }
     this.setBadge('successWorkbookBadge', successCount > 0 ? `已追加 ${successCount}` : '未追加', successCount > 0 ? 'success' : 'idle');
 
     const errorReportList = document.getElementById('errorReportList');
@@ -136,17 +142,10 @@ const appBridge = {
     const errorCount = errorReportPaths.length || failedCount || duplicateCount;
     this.setBadge('errorReportBadge', `${errorCount} 个`, errorCount > 0 ? 'warning' : 'idle');
 
-    const logFilePathEl = document.getElementById('logFilePath');
-    logFilePathEl.innerText = logPath || '暂无日志文件';
-    logFilePathEl.classList.toggle('empty', !logPath);
-    this.setBadge('logFileBadge', logPath ? '已生成' : '未生成', logPath ? 'success' : 'idle');
-
     document.getElementById('openSuccessWorkbookButton').disabled = !successWorkbookPath;
     document.getElementById('openSuccessWorkbookDirButton').disabled = !(successWorkbookPath || outputs.successDir);
     document.getElementById('openFirstErrorReportButton').disabled = errorReportPaths.length === 0;
     document.getElementById('openErrorDirButton').disabled = !(errorReportPaths.length > 0 || outputs.errorDir);
-    document.getElementById('openLogFileButton').disabled = !logPath;
-    document.getElementById('openLogDirButton').disabled = !(logPath || outputs.logDir);
   },
 
   setBadge(id, text, tone) {

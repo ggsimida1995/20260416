@@ -267,6 +267,7 @@ def _execute_action(
         "mode": action,
         "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "successWorkbookPath": "",
+        "successProjectCodes": [],
         "errorReportPaths": [],
         "logPath": "",
         "successCount": 0,
@@ -323,6 +324,7 @@ def _execute_action(
                 "outputs": {
                     **output_payload,
                     "successWorkbookPath": str(result.compare_success_workbook_path) if result.compare_success_workbook_path else "",
+                    "successProjectCodes": list(result.compare_success_project_codes),
                     "errorReportPaths": [str(path) for path in result.compare_error_report_paths],
                     "logPath": str(result.log_path) if result.log_path else "",
                     "successCount": result.compare_appended_count,
@@ -370,6 +372,7 @@ def _execute_action(
             "outputs": {
                 **output_payload,
                 "successWorkbookPath": str(result.success_workbook_path) if result.success_workbook_path else "",
+                "successProjectCodes": list(result.success_project_codes),
                 "errorReportPaths": [str(path) for path in result.error_report_paths],
                 "logPath": str(result.log_path) if result.log_path else "",
                 "successCount": result.appended_count,
@@ -905,6 +908,7 @@ class WebviewApi:
             "mode": "",
             "updatedAt": "",
             "successWorkbookPath": "",
+            "successProjectCodes": [],
             "errorReportPaths": [],
             "logPath": "",
             "successCount": 0,
@@ -917,6 +921,11 @@ class WebviewApi:
             "mode": str(payload.get("mode", "") or ""),
             "updatedAt": str(payload.get("updatedAt", "") or ""),
             "successWorkbookPath": str(payload.get("successWorkbookPath", "") or ""),
+            "successProjectCodes": [
+                str(code)
+                for code in payload.get("successProjectCodes", [])
+                if isinstance(code, (str, Path)) and str(code)
+            ],
             "errorReportPaths": [
                 str(path)
                 for path in payload.get("errorReportPaths", [])
@@ -938,6 +947,7 @@ class WebviewApi:
             "mode": summary["mode"],
             "updatedAt": summary["updatedAt"],
             "successWorkbookPath": summary["successWorkbookPath"],
+            "successProjectCodes": list(summary["successProjectCodes"]),
             "successDir": str(success_dir),
             "errorReportPaths": list(summary["errorReportPaths"]),
             "errorDir": str(error_dir),
