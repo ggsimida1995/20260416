@@ -116,6 +116,15 @@ def _build_desktop_runtime_check() -> dict[str, str]:
     }
 
 
+def _build_pending_check(label: str, detail: str) -> dict[str, str]:
+    return {
+        "label": label,
+        "status": "检测中",
+        "tone": "running",
+        "detail": detail,
+    }
+
+
 def _build_directory_check(label: str, path: Path) -> dict[str, str]:
     target = path.expanduser()
     existed_before = target.exists()
@@ -229,6 +238,7 @@ class WebviewApi:
         open_path: Callable[[Path], None] = _open_local_path,
         webview_module=webview,
         log_time_provider: Callable[[], str] | None = None,
+        startup_in_background: bool = False,
     ) -> None:
         self.settings_path = settings_path
         self.processed_projects_path = processed_projects_path
@@ -242,25 +252,47 @@ class WebviewApi:
         self._open_path = open_path
         self._webview = webview_module
         self._log_time_provider = log_time_provider or (lambda: datetime.now().strftime("%H:%M:%S"))
+        self.startup_in_background = startup_in_background
 
         self._lock = threading.RLock()
         self.window: Any | None = None
         self.settings = self._settings_loader(self.settings_path)
-        self.desktop_runtime_check = _build_desktop_runtime_check()
-        self.runtime_directory_check = _build_directory_check("运行目录", APP_RUNTIME_ROOT)
-        self.file_root_check = _build_directory_check("资料目录", self._current_file_root())
+        if self.startup_in_background:
+            self.desktop_runtime_check = _build_pending_check("桌面内核", "页面打开后后台检测")
+            self.runtime_directory_check = _build_pending_check("运行目录", "页面打开后后台检测")
+            self.file_root_check = _build_pending_check("资料目录", str(self._current_file_root()))
+        else:
+            self.desktop_runtime_check = _build_desktop_runtime_check()
+            self.runtime_directory_check = _build_directory_check("运行目录", APP_RUNTIME_ROOT)
+            self.file_root_check = _build_directory_check("资料目录", self._current_file_root())
         self.session_result: SessionInspectionResult | None = None
         self.logs: list[str] = []
-        self.status_text = "待执行"
-        self.status_tone = "idle"
+        self.status_text = "启动检测中" if self.startup_in_background else "待执行"
+        self.status_tone = "running" if self.startup_in_background else "idle"
         self.active_task_name = ""
         self.stop_requested = False
         self.startup_snapshot_logged = False
+        self.startup_probe_started = False
+        self.startup_probe_running = False
 
     def attach_window(self, window: Any) -> None:
         self.window = window
 
     def bootstrap(self) -> dict[str, Any]:
+        if self.startup_in_background:
+            should_start = False
+            with self._lock:
+                if not self.startup_probe_started:
+                    self.startup_probe_started = True
+                    self.startup_probe_running = True
+                    self._append_log("[启动] 页面已打开，后台检测环境和会话", push=False)
+                    should_start = True
+                state = self._build_state()
+            if should_start:
+                worker = threading.Thread(target=self._run_startup_probe, daemon=True)
+                worker.start()
+            return state
+
         self._inspect_session(log_result=False, push=False)
         self._append_startup_snapshot_logs()
         return self._build_state()
@@ -434,6 +466,24 @@ class WebviewApi:
             self._append_log(message, push=False)
         self._push_state()
 
+    def _run_startup_probe(self) -> None:
+        try:
+            desktop_runtime_check = _build_desktop_runtime_check()
+            runtime_directory_check = _build_directory_check("运行目录", APP_RUNTIME_ROOT)
+            file_root_check = _build_directory_check("资料目录", self._current_file_root())
+
+            with self._lock:
+                self.desktop_runtime_check = desktop_runtime_check
+                self.runtime_directory_check = runtime_directory_check
+                self.file_root_check = file_root_check
+
+            self._inspect_session(log_result=False, push=False)
+            self._append_startup_snapshot_logs()
+        finally:
+            with self._lock:
+                self.startup_probe_running = False
+            self._push_state()
+
     def _append_startup_snapshot_logs(self) -> None:
         with self._lock:
             if self.startup_snapshot_logged:
@@ -538,6 +588,7 @@ class WebviewApi:
                     "tone": self.status_tone,
                 },
                 "running": self._is_running(),
+                "startupLoading": self.startup_probe_running,
                 "summary": {
                     "mode": "Chrome 本机会话直连 + 本地比对",
                     "directory": str(self._current_file_root()),
@@ -619,7 +670,7 @@ class WebviewApi:
 
 
 def run_gui_app() -> int:
-    api = WebviewApi()
+    api = WebviewApi(startup_in_background=True)
     window = webview.create_window(
         WINDOW_TITLE,
         html=build_app_html(),

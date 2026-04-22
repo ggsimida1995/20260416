@@ -51,14 +51,24 @@ const appBridge = {
     }
 
     const running = state.running;
-    document.getElementById('startButtonLabel').innerText = running ? '请求停止' : '开始批处理';
-    document.getElementById('startButtonDetail').innerText = running
-      ? '当前步骤结束后停止'
-      : '下载 / 比对 / 清理';
-    document.getElementById('downloadButton').disabled = running;
-    document.getElementById('compareButton').disabled = running;
-    document.getElementById('settingsButton').disabled = running;
-    document.getElementById('refreshSessionButton').disabled = running;
+    const startupLoading = Boolean(state.startupLoading);
+    const busy = running || startupLoading;
+    document.getElementById('startupStrip').classList.toggle('hidden', !startupLoading);
+    document.getElementById('startButtonLabel').innerText = startupLoading
+      ? '启动检测中'
+      : running
+        ? '请求停止'
+        : '开始批处理';
+    document.getElementById('startButtonDetail').innerText = startupLoading
+      ? '页面已打开，后台加载中'
+      : running
+        ? '当前步骤结束后停止'
+        : '下载 / 比对 / 清理';
+    document.getElementById('startButton').disabled = startupLoading;
+    document.getElementById('downloadButton').disabled = busy;
+    document.getElementById('compareButton').disabled = busy;
+    document.getElementById('settingsButton').disabled = busy;
+    document.getElementById('refreshSessionButton').disabled = busy;
 
     if (this.modalOpen) {
       this.fillSettingsForm(state.settings);

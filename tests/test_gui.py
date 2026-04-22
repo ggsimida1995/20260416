@@ -167,6 +167,36 @@ def test_webview_api_bootstrap_returns_ready_state(monkeypatch, tmp_path: Path):
     assert state["logs"].count(with_time("[启动] 自动检测当前环境和会话")) == 1
 
 
+def test_webview_api_bootstrap_can_defer_startup_checks(monkeypatch, tmp_path: Path):
+    started = []
+
+    class FakeThread:
+        def __init__(self, *, target=None, args=(), daemon=None):
+            self.target = target
+            self.args = args
+            self.daemon = daemon
+
+        def start(self):
+            started.append((self.target, self.args, self.daemon))
+
+    api = WebviewApi(
+        settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
+        session_inspector=lambda **kwargs: (_ for _ in ()).throw(AssertionError("startup should not block bootstrap")),
+        log_time_provider=lambda: FIXED_LOG_TIME,
+        startup_in_background=True,
+    )
+    monkeypatch.setattr(gui_module.threading, "Thread", FakeThread)
+
+    state = api.bootstrap()
+
+    assert state["status"]["text"] == "启动检测中"
+    assert state["status"]["tone"] == "running"
+    assert state["startupLoading"] is True
+    assert state["logs"] == [with_time("[启动] 页面已打开，后台检测环境和会话")]
+    assert len(started) == 1
+    assert started[0][0] == api._run_startup_probe
+
+
 def test_webview_api_choose_file_root_uses_window_dialog(tmp_path: Path):
     chosen = str(tmp_path / "chosen")
     window = FakeWindow(dialog_result=[chosen])
