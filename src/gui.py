@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+import multiprocessing
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -225,6 +227,162 @@ def _open_local_path(path: Path) -> None:
     )
 
 
+def _inspect_session_with(
+    session_inspector: Callable[..., SessionInspectionResult],
+    *,
+    timeout_seconds: float,
+) -> SessionInspectionResult:
+    try:
+        return session_inspector(timeout_seconds=timeout_seconds)
+    except Exception as exc:
+        return SessionInspectionResult(
+            status="error",
+            detail=f"会话检测失败: {exc}",
+            cookie_db_exists=False,
+            cookie_db_path="",
+            hollysys_cookie_count=0,
+            cookie_names=(),
+            safe_storage_available=False,
+            authenticated=False,
+            http_status=0,
+            final_url="",
+        )
+
+
+def _execute_action(
+    action: str,
+    *,
+    file_root: Path,
+    processed_projects_path: Path,
+    ai_settings: AISettings,
+    session_timeout_seconds: float,
+    session_inspector: Callable[..., SessionInspectionResult],
+    batch_runner: Callable[..., BatchWorkflowResult],
+    download_runner: Callable[..., WebPhaseResult],
+    compare_runner: Callable[..., WorkflowResult],
+    log_callback: Callable[[str], None] | None,
+) -> dict[str, Any]:
+    session_result: SessionInspectionResult | None = None
+
+    try:
+        if action == "batch" and ai_settings.enabled and not is_remote_recognition_configured(ai_settings):
+            if log_callback is not None:
+                log_callback("[运行] 未配置 AI 或 OCR，请先在设置中完成至少一种识别配置")
+            return {
+                "status_text": "需配置 AI/OCR",
+                "status_tone": "warning",
+                "session_result": session_result,
+            }
+
+        if action in {"batch", "download"}:
+            session_result = _inspect_session_with(
+                session_inspector,
+                timeout_seconds=session_timeout_seconds,
+            )
+            if session_result.status != "ready":
+                if log_callback is not None:
+                    log_callback(f"[会话] {session_result.detail}")
+                return {
+                    "status_text": f"{'批处理' if action == 'batch' else '下载'}前需先登录",
+                    "status_tone": "warning",
+                    "session_result": session_result,
+                }
+
+        if action == "batch":
+            if log_callback is not None:
+                log_callback("[运行] 开始执行批处理")
+            result = batch_runner(
+                file_root=file_root,
+                username="",
+                password="",
+                log_callback=log_callback,
+                ai_settings=ai_settings,
+            )
+            if log_callback is not None:
+                log_callback(
+                    "[运行] 批处理完成: "
+                    f"下载={result.web_processed_count} | 追加成功={result.compare_appended_count} | "
+                    f"重复跳过={result.compare_duplicate_count} | 失败={result.compare_failed_count} | 清理成功={result.cleaned_count}"
+                )
+            return {
+                "status_text": "批处理完成",
+                "status_tone": "success",
+                "session_result": session_result,
+            }
+
+        if action == "download":
+            if log_callback is not None:
+                log_callback("[运行] 开始下载 Hollysys 待办资料")
+            result = download_runner(
+                file_root=file_root,
+                username="",
+                password="",
+                log_callback=log_callback,
+                processed_projects_path=processed_projects_path,
+            )
+            if log_callback is not None:
+                log_callback(f"[运行] 下载完成: {len(result.processed_projects)} | 跳过: {len(result.skipped_projects)}")
+            return {
+                "status_text": "下载完成",
+                "status_tone": "success",
+                "session_result": session_result,
+            }
+
+        if log_callback is not None:
+            log_callback("[运行] 开始执行文件比对")
+        result = compare_runner(
+            file_root=file_root,
+            username="",
+            password="",
+            log_callback=log_callback,
+            ai_settings=ai_settings,
+        )
+        if log_callback is not None:
+            log_callback(
+                f"[运行] 本地比对完成: 追加成功={result.appended_count} | 重复跳过={result.duplicate_count} | 失败={result.failed_count}"
+            )
+        return {
+            "status_text": "比对完成",
+            "status_tone": "success",
+            "session_result": session_result,
+        }
+    except Exception as exc:
+        if log_callback is not None:
+            log_callback(f"[异常] {exc}")
+        return {
+            "status_text": "批处理失败" if action == "batch" else "下载失败" if action == "download" else "比对失败",
+            "status_tone": "error",
+            "session_result": session_result,
+        }
+
+
+def run_action_worker_process(
+    action: str,
+    *,
+    file_root: Path,
+    processed_projects_path: Path,
+    ai_settings: AISettings,
+    session_timeout_seconds: float,
+    worker_queue: Any,
+) -> None:
+    def queue_log(message: str) -> None:
+        worker_queue.put({"event": "log", "message": message})
+
+    result = _execute_action(
+        action,
+        file_root=file_root,
+        processed_projects_path=processed_projects_path,
+        ai_settings=ai_settings,
+        session_timeout_seconds=session_timeout_seconds,
+        session_inspector=inspect_local_hollysys_session,
+        batch_runner=run_batch_workflow,
+        download_runner=run_download_workflow,
+        compare_runner=run_compare_workflow,
+        log_callback=queue_log,
+    )
+    worker_queue.put({"event": "result", "payload": result})
+
+
 class WebviewApi:
     def __init__(
         self,
@@ -280,6 +438,7 @@ class WebviewApi:
         self.busy_operation = ""
         self.busy_title = ""
         self.busy_detail = ""
+        self.action_process: Any | None = None
 
     def attach_window(self, window: Any) -> None:
         self.window = window
@@ -379,6 +538,7 @@ class WebviewApi:
         with self._lock:
             self.stop_requested = False
             self.active_task_name = action
+            self._persist_settings()
             if action == "batch":
                 self._set_busy("batch", "正在准备批处理", "先检查会话和识别配置，再进入下载 / 比对 / 清理")
                 self._append_log("[运行] 已接收批处理任务，正在后台准备", push=False)
@@ -391,95 +551,152 @@ class WebviewApi:
                 self._set_busy("compare", "正在准备本地比对", "校验配置后开始读取本地文件")
                 self._append_log("[运行] 已接收本地比对任务，正在后台准备", push=False)
                 self._set_status("比对准备中", "running")
-            state = self._build_state()
+        self._start_action_worker(action)
+        return self._build_state()
 
-        worker = threading.Thread(target=self._run_action_sync, args=(action,), daemon=True)
-        worker.start()
-        return state
+    def _start_action_worker(self, action: str) -> None:
+        try:
+            process_context = multiprocessing.get_context("spawn")
+            worker_queue = process_context.Queue()
+            process = process_context.Process(
+                target=run_action_worker_process,
+                kwargs={
+                    "action": action,
+                    "file_root": self._current_file_root(),
+                    "processed_projects_path": self.processed_projects_path,
+                    "ai_settings": self.settings.ai,
+                    "session_timeout_seconds": self.session_timeout_seconds,
+                    "worker_queue": worker_queue,
+                },
+                daemon=True,
+            )
+            process.start()
+        except Exception as exc:
+            with self._lock:
+                self._append_log(f"[异常] 无法启动后台进程: {exc}", push=False)
+                self._set_status("后台进程启动失败", "error")
+                self.active_task_name = ""
+                self._clear_busy(action)
+            self._push_state()
+            return
+
+        with self._lock:
+            self.action_process = process
+
+        monitor = threading.Thread(
+            target=self._monitor_action_worker,
+            args=(action, worker_queue, process),
+            daemon=True,
+        )
+        monitor.start()
+
+    def _monitor_action_worker(self, action: str, worker_queue: Any, process: Any) -> None:
+        payload: dict[str, Any] | None = None
+
+        def handle_message(message: Any) -> dict[str, Any] | None:
+            if not isinstance(message, dict):
+                return None
+
+            event = str(message.get("event", ""))
+            if event == "log":
+                log_message = message.get("message")
+                if isinstance(log_message, str):
+                    self._background_log(log_message)
+                return None
+
+            if event == "result":
+                raw_payload = message.get("payload")
+                if isinstance(raw_payload, dict):
+                    return raw_payload
+            return None
+
+        try:
+            while True:
+                try:
+                    message = worker_queue.get(timeout=0.2)
+                except queue.Empty:
+                    if not process.is_alive():
+                        break
+                    continue
+
+                handled_payload = handle_message(message)
+                if handled_payload is not None:
+                    payload = handled_payload
+
+                if payload is not None and not process.is_alive():
+                    break
+        finally:
+            try:
+                process.join(timeout=0.5)
+            except Exception:
+                pass
+
+            while True:
+                try:
+                    message = worker_queue.get_nowait()
+                except queue.Empty:
+                    break
+                handled_payload = handle_message(message)
+                if handled_payload is not None:
+                    payload = handled_payload
+
+            try:
+                worker_queue.close()
+                worker_queue.join_thread()
+            except Exception:
+                pass
+
+            with self._lock:
+                if payload is not None:
+                    session_result = payload.get("session_result")
+                    if isinstance(session_result, SessionInspectionResult):
+                        self.session_result = session_result
+                    self._set_status(
+                        str(payload.get("status_text", "任务完成")),
+                        str(payload.get("status_tone", "success")),
+                    )
+                elif process.exitcode not in (0, None):
+                    self._append_log(f"[异常] 后台进程异常退出: exitcode={process.exitcode}", push=False)
+                    self._set_status("后台进程异常退出", "error")
+
+                self.active_task_name = ""
+                self.action_process = None
+                self._clear_busy(action)
+            self._push_state()
 
     def _run_action_sync(self, action: str) -> None:
         try:
-            file_root = self._current_file_root()
-            if action == "batch" and self.settings.ai.enabled and not is_remote_recognition_configured(self.settings.ai):
-                with self._lock:
-                    self._append_log("[运行] 未配置 AI 或 OCR，请先在设置中完成至少一种识别配置", push=False)
-                    self._set_status("需配置 AI/OCR", "warning")
-                return
-
-            if action in {"batch", "download"}:
-                result = self._inspect_session(log_result=False, push=False)
-                if result.status != "ready":
-                    with self._lock:
-                        self._append_log(f"[会话] {result.detail}", push=False)
-                        self._set_status(f"{'批处理' if action == 'batch' else '下载'}前需先登录", "warning")
-                    return
-
             with self._lock:
-                self._persist_settings()
                 if action == "batch":
                     self._set_busy("batch", "批处理执行中", "正在下载 / 比对 / 清理项目资料")
-                    self._append_log("[运行] 开始执行批处理", push=False)
                     self._set_status("批处理中", "running")
                 elif action == "download":
                     self._set_busy("download", "下载任务执行中", "正在抓取 Hollysys 待办附件")
-                    self._append_log("[运行] 开始下载 Hollysys 待办资料", push=False)
                     self._set_status("下载中", "running")
                 else:
                     self._set_busy("compare", "本地比对执行中", "正在扫描目录并比对文件内容")
-                    self._append_log("[运行] 开始执行文件比对", push=False)
                     self._set_status("比对中", "running")
             self._push_state()
-
-            if action == "batch":
-                result = self._batch_runner(
-                    file_root=file_root,
-                    username="",
-                    password="",
-                    log_callback=self._background_log,
-                    ai_settings=self.settings.ai,
-                )
-                self._background_log(
-                    "[运行] 批处理完成: "
-                    f"下载={result.web_processed_count} | 追加成功={result.compare_appended_count} | "
-                    f"重复跳过={result.compare_duplicate_count} | 失败={result.compare_failed_count} | 清理成功={result.cleaned_count}"
-                )
-                with self._lock:
-                    self._set_status("批处理完成", "success")
-            elif action == "download":
-                result = self._download_runner(
-                    file_root=file_root,
-                    username="",
-                    password="",
-                    log_callback=self._background_log,
-                    processed_projects_path=self.processed_projects_path,
-                )
-                self._background_log(
-                    f"[运行] 下载完成: {len(result.processed_projects)} | 跳过: {len(result.skipped_projects)}"
-                )
-                with self._lock:
-                    self._set_status("下载完成", "success")
-            else:
-                result = self._compare_runner(
-                    file_root=file_root,
-                    username="",
-                    password="",
-                    log_callback=self._background_log,
-                    ai_settings=self.settings.ai,
-                )
-                self._background_log(
-                    f"[运行] 本地比对完成: 追加成功={result.appended_count} | 重复跳过={result.duplicate_count} | 失败={result.failed_count}"
-                )
-                with self._lock:
-                    self._set_status("比对完成", "success")
-        except Exception as exc:
-            self._background_log(f"[异常] {exc}")
+            result = _execute_action(
+                action,
+                file_root=self._current_file_root(),
+                processed_projects_path=self.processed_projects_path,
+                ai_settings=self.settings.ai,
+                session_timeout_seconds=self.session_timeout_seconds,
+                session_inspector=self._session_inspector,
+                batch_runner=self._batch_runner,
+                download_runner=self._download_runner,
+                compare_runner=self._compare_runner,
+                log_callback=self._background_log,
+            )
             with self._lock:
-                if action == "batch":
-                    self._set_status("批处理失败", "error")
-                elif action == "download":
-                    self._set_status("下载失败", "error")
-                else:
-                    self._set_status("比对失败", "error")
+                session_result = result.get("session_result")
+                if isinstance(session_result, SessionInspectionResult):
+                    self.session_result = session_result
+                self._set_status(
+                    str(result.get("status_text", "任务完成")),
+                    str(result.get("status_tone", "success")),
+                )
         finally:
             with self._lock:
                 self.active_task_name = ""
@@ -566,21 +783,10 @@ class WebviewApi:
             self.startup_snapshot_logged = True
 
     def _inspect_session(self, *, log_result: bool, push: bool) -> SessionInspectionResult:
-        try:
-            result = self._session_inspector(timeout_seconds=self.session_timeout_seconds)
-        except Exception as exc:
-            result = SessionInspectionResult(
-                status="error",
-                detail=f"会话检测失败: {exc}",
-                cookie_db_exists=False,
-                cookie_db_path="",
-                hollysys_cookie_count=0,
-                cookie_names=(),
-                safe_storage_available=False,
-                authenticated=False,
-                http_status=0,
-                final_url="",
-            )
+        result = _inspect_session_with(
+            self._session_inspector,
+            timeout_seconds=self.session_timeout_seconds,
+        )
 
         with self._lock:
             self.session_result = result

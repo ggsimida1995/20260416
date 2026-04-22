@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import multiprocessing
+
 def run_gui() -> int:
     from src.gui import run_gui_app
 
@@ -7,6 +9,7 @@ def run_gui() -> int:
 
 
 def main() -> int:
+    multiprocessing.freeze_support()
     return run_gui()
 
 

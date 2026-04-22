@@ -325,22 +325,13 @@ def test_webview_api_handle_start_stop_requests_stop_when_running(tmp_path: Path
 def test_webview_api_run_download_only_can_defer_preflight(monkeypatch, tmp_path: Path):
     started = []
 
-    class FakeThread:
-        def __init__(self, *, target=None, args=(), daemon=None):
-            self.target = target
-            self.args = args
-            self.daemon = daemon
-
-        def start(self):
-            started.append((self.target, self.args, self.daemon))
-
     api = WebviewApi(
         settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
         session_inspector=lambda **kwargs: (_ for _ in ()).throw(AssertionError("download preflight should not block api call")),
         download_runner=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("download runner should not be called")),
         log_time_provider=lambda: FIXED_LOG_TIME,
     )
-    monkeypatch.setattr(gui_module.threading, "Thread", FakeThread)
+    monkeypatch.setattr(api, "_start_action_worker", lambda action: started.append(action))
 
     state = api.run_download_only()
 
@@ -350,21 +341,11 @@ def test_webview_api_run_download_only_can_defer_preflight(monkeypatch, tmp_path
     assert state["busy"]["kind"] == "download"
     assert with_time("[运行] 已接收下载任务，正在后台准备") in state["logs"]
     assert len(started) == 1
-    assert started[0][0] == api._run_action_sync
-    assert started[0][1] == ("download",)
+    assert started[0] == "download"
 
 
 def test_webview_api_start_batch_can_defer_preflight(monkeypatch, tmp_path: Path):
     started = []
-
-    class FakeThread:
-        def __init__(self, *, target=None, args=(), daemon=None):
-            self.target = target
-            self.args = args
-            self.daemon = daemon
-
-        def start(self):
-            started.append((self.target, self.args, self.daemon))
 
     monkeypatch.setattr(gui_module, "is_remote_recognition_configured", lambda settings: False)
     api = WebviewApi(
@@ -373,7 +354,7 @@ def test_webview_api_start_batch_can_defer_preflight(monkeypatch, tmp_path: Path
         batch_runner=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("batch runner should not be called")),
         log_time_provider=lambda: FIXED_LOG_TIME,
     )
-    monkeypatch.setattr(gui_module.threading, "Thread", FakeThread)
+    monkeypatch.setattr(api, "_start_action_worker", lambda action: started.append(action))
 
     state = api.start_batch()
 
@@ -383,8 +364,95 @@ def test_webview_api_start_batch_can_defer_preflight(monkeypatch, tmp_path: Path
     assert state["busy"]["kind"] == "batch"
     assert with_time("[运行] 已接收批处理任务，正在后台准备") in state["logs"]
     assert len(started) == 1
-    assert started[0][0] == api._run_action_sync
-    assert started[0][1] == ("batch",)
+    assert started[0] == "batch"
+
+
+def test_webview_api_run_compare_only_starts_worker_process(monkeypatch, tmp_path: Path):
+    started = []
+
+    api = WebviewApi(
+        settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
+        session_inspector=lambda **kwargs: ready_session_result(),
+        log_time_provider=lambda: FIXED_LOG_TIME,
+    )
+    monkeypatch.setattr(api, "_start_action_worker", lambda action: started.append(action))
+
+    state = api.run_compare_only()
+
+    assert state["status"]["text"] == "比对准备中"
+    assert state["running"] is True
+    assert state["busy"]["active"] is True
+    assert state["busy"]["kind"] == "compare"
+    assert with_time("[运行] 已接收本地比对任务，正在后台准备") in state["logs"]
+    assert started == ["compare"]
+
+
+def test_webview_api_start_action_worker_uses_process_and_monitor_thread(monkeypatch, tmp_path: Path):
+    created = {}
+    thread_started = []
+
+    class FakeQueue:
+        pass
+
+    class FakeProcess:
+        def __init__(self, *, target=None, kwargs=None, daemon=None):
+            self.target = target
+            self.kwargs = kwargs or {}
+            self.daemon = daemon
+            self.started = False
+
+        def start(self):
+            self.started = True
+
+        def is_alive(self):
+            return False
+
+        def join(self, timeout=None):
+            return None
+
+        @property
+        def exitcode(self):
+            return 0
+
+    class FakeContext:
+        def Queue(self):
+            created["queue"] = FakeQueue()
+            return created["queue"]
+
+        def Process(self, *, target=None, kwargs=None, daemon=None):
+            process = FakeProcess(target=target, kwargs=kwargs, daemon=daemon)
+            created["process"] = process
+            return process
+
+    class FakeThread:
+        def __init__(self, *, target=None, args=(), daemon=None):
+            self.target = target
+            self.args = args
+            self.daemon = daemon
+
+        def start(self):
+            thread_started.append((self.target, self.args, self.daemon))
+
+    api = WebviewApi(
+        settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
+        session_inspector=lambda **kwargs: ready_session_result(),
+        log_time_provider=lambda: FIXED_LOG_TIME,
+    )
+    monkeypatch.setattr(gui_module.multiprocessing, "get_context", lambda method: FakeContext())
+    monkeypatch.setattr(gui_module.threading, "Thread", FakeThread)
+
+    api._start_action_worker("compare")
+
+    assert created["process"].target == gui_module.run_action_worker_process
+    assert created["process"].kwargs["action"] == "compare"
+    assert created["process"].kwargs["file_root"] == tmp_path
+    assert created["process"].kwargs["processed_projects_path"] == gui_module.PROCESSED_PROJECTS_PATH
+    assert created["process"].kwargs["worker_queue"] is created["queue"]
+    assert created["process"].daemon is True
+    assert created["process"].started is True
+    assert api.action_process is created["process"]
+    assert len(thread_started) == 1
+    assert thread_started[0][0] == api._monitor_action_worker
 
 
 def test_webview_api_run_action_sync_download_sets_warning_when_session_missing(tmp_path: Path):
