@@ -44,6 +44,19 @@ def _pywebview_version() -> str:
         return ""
 
 
+def _hidden_subprocess_kwargs() -> dict[str, Any]:
+    if sys.platform != "win32":
+        return {}
+
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    }
+
+
 def _detect_webview2_version() -> str:
     if sys.platform != "win32":
         return ""
@@ -60,6 +73,7 @@ def _detect_webview2_version() -> str:
                 check=False,
                 capture_output=True,
                 text=True,
+                **_hidden_subprocess_kwargs(),
             )
         except OSError:
             return ""

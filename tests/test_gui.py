@@ -98,6 +98,40 @@ def test_build_app_html_inlines_bundle_assets(monkeypatch, tmp_path: Path):
     assert "window.inlineTest = true;" in html
 
 
+def test_detect_webview2_version_hides_windows_console(monkeypatch):
+    class FakeStartupInfo:
+        def __init__(self) -> None:
+            self.dwFlags = 0
+            self.wShowWindow = None
+
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append(kwargs)
+
+        class Result:
+            returncode = 1
+            stdout = ""
+
+        return Result()
+
+    monkeypatch.setattr(gui_module.sys, "platform", "win32")
+    monkeypatch.setattr(gui_module.subprocess, "STARTUPINFO", FakeStartupInfo, raising=False)
+    monkeypatch.setattr(gui_module.subprocess, "STARTF_USESHOWWINDOW", 1, raising=False)
+    monkeypatch.setattr(gui_module.subprocess, "SW_HIDE", 0, raising=False)
+    monkeypatch.setattr(gui_module.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(gui_module.subprocess, "run", fake_run)
+
+    version = gui_module._detect_webview2_version()
+
+    assert version == ""
+    assert calls
+    assert calls[0]["creationflags"] == 0x08000000
+    assert isinstance(calls[0]["startupinfo"], FakeStartupInfo)
+    assert calls[0]["startupinfo"].dwFlags & 1
+    assert calls[0]["startupinfo"].wShowWindow == 0
+
+
 def test_webview_api_bootstrap_returns_ready_state(monkeypatch, tmp_path: Path):
     startup_checks = [
         {"label": "桌面内核", "status": "已就绪", "tone": "success", "detail": "macOS | pywebview 6.2.1"},
