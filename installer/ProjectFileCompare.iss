@@ -1,4 +1,4 @@
-#define MyAppName "Project File Compare"
+#define MyAppName "项目资料比对助手"
 #define MyAppVersion "0.1.0"
 #define MyAppPublisher "FYX"
 #define MyAppExeName "ProjectFileCompare.exe"
@@ -30,7 +30,7 @@ AppId={#MyAppId}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={localappdata}\Programs\{#MyAppName}
+DefaultDirName={localappdata}\Programs\ProjectFileCompare
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest

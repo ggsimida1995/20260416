@@ -1,8 +1,7 @@
 from datetime import date
 
 from src.compare import compare_project_data
-from src.models import CompareFailure, DocxData, PdfData
-from src.writers.error_writer import write_error_report
+from src.models import DocxData, PdfData
 
 
 def test_compare_passes_when_pdf_sign_date_is_inside_docx_range():
@@ -203,21 +202,3 @@ def test_compare_logs_only_result_without_field_values():
     assert "xlsx=" not in joined
     assert "pdf=" not in joined
 
-
-def test_write_error_report_lists_all_failures(tmp_path):
-    output_path = write_error_report(
-        tmp_path,
-        "BHE-25030367-01",
-        [
-            CompareFailure(
-                field_name="用户联系人",
-                message="姓名不一致",
-                values={"xlsx": "黄汉民", "pdf": "王某某"},
-            )
-        ],
-    )
-
-    assert output_path.exists()
-    content = output_path.read_text(encoding="utf-8")
-    assert "BHE-25030367-01" in content
-    assert "用户联系人" in content

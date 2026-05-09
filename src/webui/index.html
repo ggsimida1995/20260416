@@ -3,7 +3,19 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Project File Compare</title>
+  <title>项目资料比对助手</title>
+  <script>
+    (function () {
+      try {
+        var theme = localStorage.getItem('project-file-compare-theme');
+        if (theme === 'light' || theme === 'dark') {
+          document.documentElement.dataset.theme = theme;
+        }
+      } catch (error) {
+        document.documentElement.removeAttribute('data-theme');
+      }
+    })();
+  </script>
   <style>
 /*__APP_CSS__*/
   </style>
@@ -13,8 +25,8 @@
     <section class="card topbar-card">
       <div class="title-row">
         <div class="title-block">
-          <h1 class="headline" id="appTitle">Hollysys 批处理</h1>
-          <p class="subline" id="appSubtitle">下载 / 比现代 / 清理</p>
+          <h1 class="headline" id="appTitle">项目资料比对助手</h1>
+          <p class="subline" id="appSubtitle">下载 / 比对 / 清理</p>
         </div>
         <span class="status-pill idle" id="statusBadge">待执行</span>
       </div>
@@ -46,6 +58,9 @@
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
           设置
         </button>
+        <button class="utility-button theme-toggle-button" id="themeToggleButton" type="button" title="切换到夜间模式" aria-label="切换到夜间模式">
+          <svg id="themeToggleIcon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 7.5A9 9 0 1 1 12 3z"></path></svg>
+        </button>
       </div>
       <div class="busy-strip hidden" id="busyStrip" aria-live="polite">
         <div class="busy-strip-head">
@@ -70,24 +85,36 @@
         <div class="output-grid">
           <div class="output-panel">
             <div class="output-panel-head">
-              <span class="output-label">成功台账</span>
-              <span class="status-pill idle" id="successWorkbookBadge">未生成</span>
+              <span class="output-label">已下载</span>
+              <span class="status-pill idle" id="projectCountBadge">0 个</span>
             </div>
-            <div class="output-list empty" id="successProjectCodeList">暂无成功项目编号</div>
+            <div class="output-list empty" id="downloadedProjectList">暂无已下载项目</div>
             <div class="output-actions">
-              <button class="utility-button utility-button-compact" id="openSuccessWorkbookButton">打开文件</button>
-              <button class="utility-button utility-button-compact" id="openSuccessWorkbookDirButton">打开目录</button>
+              <button class="utility-button utility-button-compact button-info" id="openDownloadedDirButton">打开目录</button>
             </div>
           </div>
           <div class="output-panel">
             <div class="output-panel-head">
-              <span class="output-label">失败报告</span>
+              <span class="output-label">比对成功</span>
+              <span class="status-pill idle" id="successWorkbookBadge">未生成</span>
+            </div>
+            <div class="output-list empty" id="successProjectCodeList">暂无成功项目编号</div>
+            <div class="output-actions">
+              <button class="utility-button utility-button-compact button-success-soft" id="openSuccessWorkbookButton">打开日志</button>
+              <button class="utility-button utility-button-compact button-success" id="openSuccessWorkbookDirButton">导出结果</button>
+              <button class="utility-button utility-button-compact button-danger-soft" id="clearSuccessLogButton">清空日志</button>
+            </div>
+          </div>
+          <div class="output-panel">
+            <div class="output-panel-head">
+              <span class="output-label">比对失败</span>
               <span class="status-pill idle" id="errorReportBadge">0 个</span>
             </div>
             <div class="output-list empty" id="errorProjectCodeList">暂无失败项目编号</div>
             <div class="output-actions">
-              <button class="utility-button utility-button-compact" id="openFirstErrorReportButton">打开首个</button>
-              <button class="utility-button utility-button-compact" id="openErrorDirButton">打开目录</button>
+              <button class="utility-button utility-button-compact button-warning-soft" id="openFirstErrorReportButton">打开日志</button>
+              <button class="utility-button utility-button-compact button-warning" id="openErrorDirButton">导出结果</button>
+              <button class="utility-button utility-button-compact button-danger" id="clearErrorLogButton">清空日志</button>
             </div>
           </div>
         </div>

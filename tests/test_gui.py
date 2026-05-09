@@ -11,6 +11,11 @@ from src.models import BatchWorkflowResult, WebPhaseResult, WorkflowResult
 FIXED_LOG_TIME = "09:30:00"
 
 
+def build_api(tmp_path: Path, **kwargs) -> WebviewApi:
+    kwargs.setdefault("settings_path", tmp_path / "config" / "settings.json")
+    return WebviewApi(**kwargs)
+
+
 def ready_session_result() -> SessionInspectionResult:
     return SessionInspectionResult(
         status="ready",
@@ -63,8 +68,10 @@ def with_time(message: str) -> str:
 def test_build_app_html_contains_core_sections():
     html = build_app_html()
 
-    assert "Hollysys 批处理" in html
+    assert "项目资料比对助手" in html
     assert "运行日志" in html
+    assert "themeToggleButton" in html
+    assert "project-file-compare-theme" in html
     assert "pywebviewready" in html
     assert "/*__APP_CSS__*/" not in html
     assert "/*__APP_JS__*/" not in html
@@ -138,7 +145,7 @@ def test_webview_api_bootstrap_returns_ready_state(monkeypatch, tmp_path: Path):
         {"label": "运行目录", "status": "可写", "tone": "success", "detail": str(tmp_path)},
     ]
     monkeypatch.setattr(gui_module, "collect_startup_checks", lambda **kwargs: startup_checks)
-    api = WebviewApi(
+    api = build_api(tmp_path,
         settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
         session_inspector=lambda **kwargs: ready_session_result(),
         log_time_provider=lambda: FIXED_LOG_TIME,
@@ -179,7 +186,7 @@ def test_webview_api_bootstrap_can_defer_startup_checks(monkeypatch, tmp_path: P
         def start(self):
             started.append((self.target, self.args, self.daemon))
 
-    api = WebviewApi(
+    api = build_api(tmp_path,
         settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
         session_inspector=lambda **kwargs: (_ for _ in ()).throw(AssertionError("startup should not block bootstrap")),
         log_time_provider=lambda: FIXED_LOG_TIME,
@@ -203,7 +210,7 @@ def test_webview_api_bootstrap_can_defer_startup_checks(monkeypatch, tmp_path: P
 def test_webview_api_choose_file_root_uses_window_dialog(tmp_path: Path):
     chosen = str(tmp_path / "chosen")
     window = FakeWindow(dialog_result=[chosen])
-    api = WebviewApi(
+    api = build_api(tmp_path,
         settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
         session_inspector=lambda **kwargs: ready_session_result(),
         log_time_provider=lambda: FIXED_LOG_TIME,
@@ -228,7 +235,7 @@ def test_webview_api_refresh_session_can_defer_probe(monkeypatch, tmp_path: Path
         def start(self):
             started.append((self.target, self.args, self.daemon))
 
-    api = WebviewApi(
+    api = build_api(tmp_path,
         settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
         session_inspector=lambda **kwargs: (_ for _ in ()).throw(AssertionError("refresh should not block api call")),
         log_time_provider=lambda: FIXED_LOG_TIME,
@@ -245,20 +252,10 @@ def test_webview_api_refresh_session_can_defer_probe(monkeypatch, tmp_path: Path
     assert started[0][0] == api._run_refresh_session_sync
 
 
-def test_webview_api_save_settings_can_defer_persist(monkeypatch, tmp_path: Path):
+def test_webview_api_save_settings_persists_before_returning(tmp_path: Path):
     saved = {}
-    started = []
 
-    class FakeThread:
-        def __init__(self, *, target=None, args=(), daemon=None):
-            self.target = target
-            self.args = args
-            self.daemon = daemon
-
-        def start(self):
-            started.append((self.target, self.args, self.daemon))
-
-    api = WebviewApi(
+    api = build_api(tmp_path,
         settings_loader=lambda path: AppSettings(username="old-user", password="old-pass", last_file_root=str(tmp_path)),
         settings_saver=lambda path, username, password, last_file_root, ai_settings=None: saved.update(
             {
@@ -272,7 +269,6 @@ def test_webview_api_save_settings_can_defer_persist(monkeypatch, tmp_path: Path
         session_inspector=lambda **kwargs: ready_session_result(),
         log_time_provider=lambda: FIXED_LOG_TIME,
     )
-    monkeypatch.setattr(gui_module.threading, "Thread", FakeThread)
 
     state = api.save_settings(
         {
@@ -288,17 +284,10 @@ def test_webview_api_save_settings_can_defer_persist(monkeypatch, tmp_path: Path
         }
     )
 
-    assert saved == {}
-    assert state["busy"]["active"] is True
-    assert state["busy"]["kind"] == "settings"
     assert api.settings.username == "old-user"
     assert state["settings"]["lastFileRoot"] == str(tmp_path / "new-root")
     assert state["settings"]["requestTimeoutSeconds"] == 45
-    assert len(started) == 1
-    assert started[0][0] == api._run_save_settings_sync
-
-    api._run_save_settings_sync()
-
+    assert state["busy"]["active"] is False
     assert saved["username"] == "old-user"
     assert saved["password"] == "old-pass"
     assert saved["last_file_root"] == str(tmp_path / "new-root")
@@ -307,8 +296,259 @@ def test_webview_api_save_settings_can_defer_persist(monkeypatch, tmp_path: Path
     assert with_time("[设置] 已更新") in api.logs
 
 
-def test_webview_api_handle_start_stop_requests_stop_when_running(tmp_path: Path):
+def test_webview_api_saved_settings_survive_new_instance(tmp_path: Path):
+    settings_path = tmp_path / "config" / "settings.json"
+    api = build_api(tmp_path,
+        settings_path=settings_path,
+        settings_loader=gui_module.load_settings,
+        settings_saver=gui_module.save_settings,
+        session_inspector=lambda **kwargs: ready_session_result(),
+        log_time_provider=lambda: FIXED_LOG_TIME,
+    )
+
+    api.save_settings(
+        {
+            "lastFileRoot": str(tmp_path / "data"),
+            "aiEnabled": True,
+            "aiBaseUrl": "https://example.com/ai",
+            "aiApiKey": "secret-ai-key",
+            "aiModel": "vision-model",
+            "ocrBaseUrl": "https://example.com/ocr",
+            "ocrApiKey": "secret-ocr-key",
+            "requestTimeoutSeconds": "45",
+            "imageMaxKb": "96",
+        }
+    )
+
+    restarted = build_api(tmp_path,
+        settings_path=settings_path,
+        settings_loader=gui_module.load_settings,
+        settings_saver=gui_module.save_settings,
+        session_inspector=lambda **kwargs: ready_session_result(),
+        log_time_provider=lambda: FIXED_LOG_TIME,
+    )
+
+    assert restarted.settings.last_file_root == str(tmp_path / "data")
+    assert restarted.settings.ai.enabled is True
+    assert restarted.settings.ai.ai_base_url == "https://example.com/ai"
+    assert restarted.settings.ai.ai_api_key == "secret-ai-key"
+    assert restarted.settings.ai.ai_model == "vision-model"
+    assert restarted.settings.ai.ocr_base_url == "https://example.com/ocr"
+    assert restarted.settings.ai.ocr_api_key == "secret-ocr-key"
+    assert restarted.settings.ai.request_timeout_seconds == 45
+    assert restarted.settings.ai.image_max_kb == 96
+
+
+def test_webview_api_loads_latest_fixed_result_logs_on_startup(tmp_path: Path):
+    file_root = tmp_path / "file"
+    result_dir = file_root / "result_logs"
+    result_dir.mkdir(parents=True)
+    settings_path = tmp_path / "config" / "settings.json"
+    gui_module.save_settings(
+        settings_path,
+        username="",
+        password="",
+        last_file_root=str(file_root),
+    )
+    (result_dir / "success.log").write_text("\n".join(f"success-{index:02d}" for index in range(25)) + "\n", encoding="utf-8")
+    (result_dir / "error.log").write_text("\n".join(f"error-{index:02d}" for index in range(25)) + "\n", encoding="utf-8")
+
+    api = build_api(tmp_path,
+        settings_path=settings_path,
+        settings_loader=gui_module.load_settings,
+        settings_saver=gui_module.save_settings,
+        session_inspector=lambda **kwargs: ready_session_result(),
+        log_time_provider=lambda: FIXED_LOG_TIME,
+    )
+    outputs = api._build_outputs_state()
+
+    assert outputs["successLogPath"] == str(result_dir / "success.log")
+    assert outputs["errorLogPath"] == str(result_dir / "error.log")
+    assert outputs["successProjectCodes"] == [f"success-{index:02d}" for index in range(5, 25)]
+    assert outputs["errorProjectCodes"] == [f"error-{index:02d}" for index in range(5, 25)]
+
+
+def test_webview_api_outputs_current_project_count(tmp_path: Path):
+    file_root = tmp_path / "file"
+    (file_root / "project" / "BHE-25030367-01").mkdir(parents=True)
+    (file_root / "project" / "BHE-25030368-01").mkdir(parents=True)
+    (file_root / "project" / "readme.txt").write_text("skip", encoding="utf-8")
+    api = build_api(tmp_path,
+        settings_loader=lambda path: AppSettings(last_file_root=str(file_root)),
+        session_inspector=lambda **kwargs: ready_session_result(),
+        log_time_provider=lambda: FIXED_LOG_TIME,
+    )
+
+    outputs = api._build_outputs_state()
+
+    assert outputs["projectRoot"] == str(file_root / "project")
+    assert outputs["projectCount"] == 2
+    assert outputs["downloadedProjectNames"] == ["BHE-25030367-01", "BHE-25030368-01"]
+
+
+def test_webview_api_outputs_default_success_workbook_path(tmp_path: Path):
+    file_root = tmp_path / "file"
+    success_path = file_root / "success" / "2026年关闭满意度回访表0331.xlsx"
+    success_path.parent.mkdir(parents=True)
+    success_path.write_bytes(b"demo")
+    api = build_api(tmp_path,
+        settings_loader=lambda path: AppSettings(last_file_root=str(file_root)),
+        session_inspector=lambda **kwargs: ready_session_result(),
+        log_time_provider=lambda: FIXED_LOG_TIME,
+    )
+
+    outputs = api._build_outputs_state()
+
+    assert outputs["successWorkbookPath"] == str(success_path)
+    assert outputs["successWorkbookExists"] is True
+
+
+def test_webview_api_open_path_creates_empty_fixed_log_before_opening(tmp_path: Path):
+    opened: list[Path] = []
+    api = build_api(tmp_path,
+        settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path / "file")),
+        session_inspector=lambda **kwargs: ready_session_result(),
+        open_path=opened.append,
+        log_time_provider=lambda: FIXED_LOG_TIME,
+    )
+    log_path = tmp_path / "file" / "result_logs" / "success.log"
+
+    assert api.open_path(str(log_path)) is True
+
+    assert log_path.exists()
+    assert opened == [log_path]
+
+
+def test_webview_api_can_clear_fixed_result_logs(tmp_path: Path):
+    file_root = tmp_path / "file"
+    result_dir = file_root / "result_logs"
+    result_dir.mkdir(parents=True)
+    success_path = result_dir / "success.log"
+    error_path = result_dir / "error.log"
+    success_path.write_text("success-01\n", encoding="utf-8")
+    error_path.write_text("error-01\n", encoding="utf-8")
+    api = build_api(tmp_path,
+        settings_loader=lambda path: AppSettings(last_file_root=str(file_root)),
+        session_inspector=lambda **kwargs: ready_session_result(),
+        log_time_provider=lambda: FIXED_LOG_TIME,
+    )
+
+    success_state = api.clear_success_log()
+    error_state = api.clear_error_log()
+
+    assert success_path.read_text(encoding="utf-8") == ""
+    assert error_path.read_text(encoding="utf-8") == ""
+    assert success_state["outputs"]["successProjectCodes"] == []
+    assert error_state["outputs"]["errorProjectCodes"] == []
+    assert success_state["outputs"]["successCount"] == 0
+    assert error_state["outputs"]["failedCount"] == 0
+
+
+def test_webview_api_migrates_legacy_project_settings(monkeypatch, tmp_path: Path):
+    legacy_path = tmp_path / "legacy" / "config" / "settings.json"
+    legacy_path.parent.mkdir(parents=True)
+    legacy_path.write_text(
+        """
+{
+  "username": "",
+  "password": "",
+  "last_file_root": "/old/file",
+  "ai": {
+    "enabled": true,
+    "ai_base_url": "https://example.com/ai",
+    "ai_api_key": "secret",
+    "ai_model": "vision-model",
+    "ocr_base_url": "",
+    "ocr_api_key": "",
+    "request_timeout_seconds": 45,
+    "image_max_kb": 96
+  }
+}
+        """.strip(),
+        encoding="utf-8",
+    )
+    settings_path = tmp_path / "new" / "config" / "settings.json"
+    monkeypatch.setattr(gui_module, "LEGACY_SETTINGS_PATH", legacy_path)
+
     api = WebviewApi(
+        settings_path=settings_path,
+        settings_loader=gui_module.load_settings,
+        settings_saver=gui_module.save_settings,
+        session_inspector=lambda **kwargs: ready_session_result(),
+        log_time_provider=lambda: FIXED_LOG_TIME,
+    )
+
+    assert settings_path.exists()
+    assert api.settings.last_file_root == "/old/file"
+    assert api.settings.ai.enabled is True
+    assert api.settings.ai.ai_model == "vision-model"
+
+
+def test_webview_api_repairs_pytest_polluted_settings_from_legacy(monkeypatch, tmp_path: Path):
+    legacy_file_root = tmp_path / "real" / "file"
+    legacy_file_root.mkdir(parents=True)
+    legacy_path = tmp_path / "legacy" / "config" / "settings.json"
+    legacy_path.parent.mkdir(parents=True)
+    legacy_path.write_text(
+        f"""
+{{
+  "username": "",
+  "password": "",
+  "last_file_root": "{legacy_file_root}",
+  "ai": {{
+    "enabled": true,
+    "ai_base_url": "https://example.com/ai",
+    "ai_api_key": "legacy-secret",
+    "ai_model": "vision-model",
+    "ocr_base_url": "",
+    "ocr_api_key": "",
+    "request_timeout_seconds": 45,
+    "image_max_kb": 96
+  }}
+}}
+        """.strip(),
+        encoding="utf-8",
+    )
+    settings_path = tmp_path / "new" / "config" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(
+        """
+{
+  "username": "",
+  "password": "",
+  "last_file_root": "/private/var/folders/test/pytest-of-fxy/pytest-65/stale",
+  "ai": {
+    "enabled": false,
+    "ai_base_url": "https://ark.cn-beijing.volces.com/api/v3",
+    "ai_api_key": "",
+    "ai_model": "doubao-seed-2-0-lite-260215",
+    "ocr_base_url": "",
+    "ocr_api_key": "",
+    "request_timeout_seconds": 30,
+    "image_max_kb": 100
+  }
+}
+        """.strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(gui_module, "LEGACY_SETTINGS_PATH", legacy_path)
+    monkeypatch.setattr(gui_module, "SETTINGS_PATH", settings_path)
+
+    api = WebviewApi(
+        settings_path=settings_path,
+        settings_loader=gui_module.load_settings,
+        settings_saver=gui_module.save_settings,
+        session_inspector=lambda **kwargs: ready_session_result(),
+        log_time_provider=lambda: FIXED_LOG_TIME,
+    )
+
+    assert api.settings.last_file_root == str(legacy_file_root)
+    assert api.settings.ai.enabled is True
+    assert api.settings.ai.ai_api_key == "legacy-secret"
+
+
+def test_webview_api_handle_start_stop_requests_stop_when_running(tmp_path: Path):
+    api = build_api(tmp_path,
         settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
         session_inspector=lambda **kwargs: ready_session_result(),
         log_time_provider=lambda: FIXED_LOG_TIME,
@@ -325,7 +565,7 @@ def test_webview_api_handle_start_stop_requests_stop_when_running(tmp_path: Path
 def test_webview_api_run_download_only_can_defer_preflight(monkeypatch, tmp_path: Path):
     started = []
 
-    api = WebviewApi(
+    api = build_api(tmp_path,
         settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
         session_inspector=lambda **kwargs: (_ for _ in ()).throw(AssertionError("download preflight should not block api call")),
         download_runner=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("download runner should not be called")),
@@ -348,7 +588,7 @@ def test_webview_api_start_batch_can_defer_preflight(monkeypatch, tmp_path: Path
     started = []
 
     monkeypatch.setattr(gui_module, "is_remote_recognition_configured", lambda settings: False)
-    api = WebviewApi(
+    api = build_api(tmp_path,
         settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path), ai=AISettings(enabled=True)),
         session_inspector=lambda **kwargs: (_ for _ in ()).throw(AssertionError("batch preflight should not block api call")),
         batch_runner=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("batch runner should not be called")),
@@ -370,7 +610,7 @@ def test_webview_api_start_batch_can_defer_preflight(monkeypatch, tmp_path: Path
 def test_webview_api_run_compare_only_starts_worker_process(monkeypatch, tmp_path: Path):
     started = []
 
-    api = WebviewApi(
+    api = build_api(tmp_path,
         settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
         session_inspector=lambda **kwargs: ready_session_result(),
         log_time_provider=lambda: FIXED_LOG_TIME,
@@ -433,7 +673,7 @@ def test_webview_api_start_action_worker_uses_process_and_monitor_thread(monkeyp
         def start(self):
             thread_started.append((self.target, self.args, self.daemon))
 
-    api = WebviewApi(
+    api = build_api(tmp_path,
         settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
         session_inspector=lambda **kwargs: ready_session_result(),
         log_time_provider=lambda: FIXED_LOG_TIME,
@@ -456,7 +696,7 @@ def test_webview_api_start_action_worker_uses_process_and_monitor_thread(monkeyp
 
 
 def test_webview_api_run_action_sync_download_sets_warning_when_session_missing(tmp_path: Path):
-    api = WebviewApi(
+    api = build_api(tmp_path,
         settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
         session_inspector=lambda **kwargs: missing_session_result(),
         download_runner=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("download runner should not be called")),
@@ -475,7 +715,7 @@ def test_webview_api_run_action_sync_download_sets_warning_when_session_missing(
 
 def test_webview_api_run_action_sync_batch_requires_remote_recognition(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(gui_module, "is_remote_recognition_configured", lambda settings: False)
-    api = WebviewApi(
+    api = build_api(tmp_path,
         settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path), ai=AISettings(enabled=True)),
         session_inspector=lambda **kwargs: ready_session_result(),
         batch_runner=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("batch runner should not be called")),
@@ -501,7 +741,7 @@ def test_webview_api_run_action_sync_download_updates_logs_and_status(tmp_path: 
             log_callback("[网页阶段] 已下载项目: BHE-25030367-01 | 文件=3/3")
         return WebPhaseResult(processed_projects=["BHE-25030367-01"], skipped_projects=["BHE-25030366-01"])
 
-    api = WebviewApi(
+    api = build_api(tmp_path,
         settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
         session_inspector=lambda **kwargs: ready_session_result(),
         download_runner=fake_run_download_workflow,
@@ -516,6 +756,14 @@ def test_webview_api_run_action_sync_download_updates_logs_and_status(tmp_path: 
     assert api.active_task_name == ""
     assert with_time("[网页阶段] 已下载项目: BHE-25030367-01 | 文件=3/3") in api.logs
     assert with_time("[运行] 下载完成: 1 | 跳过: 1") in api.logs
+    assert api.output_summary["successProjectCodes"] == []
+    assert api.output_summary["errorProjectCodes"] == []
+    assert api.output_summary["resultLogPath"] == ""
+    assert api.output_summary["successLogPath"] == ""
+    assert api.output_summary["errorLogPath"] == ""
+    assert api.output_summary["successCount"] == 0
+    assert api.output_summary["duplicateCount"] == 0
+    assert not (tmp_path / "result_logs").exists()
     assert window.js_calls
 
 
@@ -529,13 +777,15 @@ def test_webview_api_run_action_sync_compare_updates_logs_and_status(tmp_path: P
             duplicate_count=1,
             failed_count=0,
             log_path=tmp_path / "error" / "logs" / "workflow.txt",
+            success_log_path=tmp_path / "result_logs" / "success.log",
+            error_log_path=tmp_path / "result_logs" / "error.log",
             success_project_codes=["BHE-25030367/01", "BHE-25030368/01"],
             error_project_codes=["BHE-25030369/01"],
             success_workbook_path=tmp_path / "success" / "2026年关闭满意度回访表0331.xlsx",
-            error_report_paths=[tmp_path / "error" / "项目A.txt"],
+            error_report_paths=[],
         )
 
-    api = WebviewApi(
+    api = build_api(tmp_path,
         settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
         session_inspector=lambda **kwargs: ready_session_result(),
         compare_runner=fake_run_compare_workflow,
@@ -550,8 +800,10 @@ def test_webview_api_run_action_sync_compare_updates_logs_and_status(tmp_path: P
     assert api.output_summary["successWorkbookPath"] == str(tmp_path / "success" / "2026年关闭满意度回访表0331.xlsx")
     assert api.output_summary["successProjectCodes"] == ["BHE-25030367/01", "BHE-25030368/01"]
     assert api.output_summary["errorProjectCodes"] == ["BHE-25030369/01"]
-    assert api.output_summary["errorReportPaths"] == [str(tmp_path / "error" / "项目A.txt")]
+    assert api.output_summary["errorReportPaths"] == []
     assert api.output_summary["logPath"] == str(tmp_path / "error" / "logs" / "workflow.txt")
+    assert api.output_summary["successLogPath"] == str(tmp_path / "result_logs" / "success.log")
+    assert api.output_summary["errorLogPath"] == str(tmp_path / "result_logs" / "error.log")
 
 
 def test_webview_api_run_action_sync_batch_updates_logs_and_status(tmp_path: Path):
@@ -566,13 +818,15 @@ def test_webview_api_run_action_sync_batch_updates_logs_and_status(tmp_path: Pat
             compare_failed_count=0,
             cleaned_count=1,
             log_path=tmp_path / "error" / "logs" / "workflow.txt",
+            success_log_path=tmp_path / "result_logs" / "success.log",
+            error_log_path=tmp_path / "result_logs" / "error.log",
             compare_success_project_codes=["BHE-25030367/01"],
             compare_error_project_codes=["BHE-25030370/01"],
             compare_success_workbook_path=tmp_path / "success" / "2026年关闭满意度回访表0331.xlsx",
-            compare_error_report_paths=[tmp_path / "error" / "项目B.txt"],
+            compare_error_report_paths=[],
         )
 
-    api = WebviewApi(
+    api = build_api(tmp_path,
         settings_loader=lambda path: AppSettings(last_file_root=str(tmp_path)),
         session_inspector=lambda **kwargs: ready_session_result(),
         batch_runner=fake_run_batch_workflow,
@@ -586,10 +840,12 @@ def test_webview_api_run_action_sync_batch_updates_logs_and_status(tmp_path: Pat
     assert api.output_summary["successWorkbookPath"] == str(tmp_path / "success" / "2026年关闭满意度回访表0331.xlsx")
     assert api.output_summary["successProjectCodes"] == ["BHE-25030367/01"]
     assert api.output_summary["errorProjectCodes"] == ["BHE-25030370/01"]
-    assert api.output_summary["errorReportPaths"] == [str(tmp_path / "error" / "项目B.txt")]
+    assert api.output_summary["errorReportPaths"] == []
+    assert api.output_summary["successLogPath"] == str(tmp_path / "result_logs" / "success.log")
+    assert api.output_summary["errorLogPath"] == str(tmp_path / "result_logs" / "error.log")
 
 
-def test_run_gui_app_creates_window_and_starts_webview(monkeypatch):
+def test_run_gui_app_creates_window_and_starts_webview(monkeypatch, tmp_path: Path):
     created = {}
     fake_window = object()
 
@@ -603,6 +859,8 @@ def test_run_gui_app_creates_window_and_starts_webview(monkeypatch):
 
     monkeypatch.setattr(gui_module.webview, "create_window", fake_create_window)
     monkeypatch.setattr(gui_module.webview, "start", fake_start)
+    monkeypatch.setattr(gui_module, "SETTINGS_PATH", tmp_path / "config" / "settings.json")
+    monkeypatch.setattr(gui_module, "PROCESSED_PROJECTS_PATH", tmp_path / "config" / "processed_projects.json")
 
     exit_code = run_gui_app()
 

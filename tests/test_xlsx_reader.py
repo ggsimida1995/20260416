@@ -39,3 +39,39 @@ def test_read_close_sheet_extracts_field_value_pairs(tmp_path: Path):
     assert result.raw_fields["用户联系人"] == "黄汉民"
     assert result.raw_fields["合同额（万元）"] == 16.3
     assert result.raw_fields["核实方式"] == "电话"
+
+
+def test_read_close_sheet_supports_xls(monkeypatch, tmp_path: Path):
+    class FakeSheet:
+        nrows = 6
+        ncols = 2
+
+        def cell_value(self, row, column):
+            values = {
+                (1, 0): "字段名称",
+                (1, 1): "内容",
+                (3, 0): "项目编号",
+                (3, 1): "BHE-25030367/01",
+                (4, 0): "用户联系人",
+                (4, 1): "黄汉民",
+                (5, 0): "用户联系方式",
+                (5, 1): 15239000050.0,
+            }
+            return values.get((row, column), "")
+
+    class FakeWorkbook:
+        def sheets(self):
+            return [FakeSheet()]
+
+    class FakeXlrd:
+        @staticmethod
+        def open_workbook(path):
+            return FakeWorkbook()
+
+    monkeypatch.setattr("src.readers.xlsx_reader.import_module", lambda name: FakeXlrd)
+
+    result = read_close_sheet(tmp_path / "项目关闭移交登记表.xls")
+
+    assert result.raw_fields["项目编号"] == "BHE-25030367/01"
+    assert result.raw_fields["用户联系人"] == "黄汉民"
+    assert result.raw_fields["用户联系方式"] == "15239000050"

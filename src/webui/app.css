@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light;
   /* Light Theme Variables - Minimalist Windows */
   --bg-app: #f9f9f9;
   --bg-card: #ffffff;
@@ -30,8 +31,36 @@
   --font-mono: "Consolas", "Cascadia Code", monospace;
 }
 
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-app: #111111;
+  --bg-card: #1c1c1c;
+  --bg-hover: #2d2d2d;
+  --bg-active: #333333;
+  
+  --border: #333333;
+  --border-strong: #444444;
+  
+  --text-main: #ffffff;
+  --text-muted: #999999;
+  
+  --accent: #4cc2ff;
+  --accent-hover: #28a8ea;
+  --accent-text: #000000;
+  
+  --success: #6ccb5f;
+  --success-bg: rgba(108, 203, 95, 0.1);
+  --warning: #fce100;
+  --warning-bg: rgba(252, 225, 0, 0.1);
+  --danger: #ff99a4;
+  --danger-bg: rgba(255, 153, 164, 0.1);
+  --running: #4cc2ff;
+  --running-bg: rgba(76, 194, 255, 0.1);
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
+    color-scheme: dark;
     --bg-app: #111111;
     --bg-card: #1c1c1c;
     --bg-hover: #2d2d2d;
@@ -90,9 +119,9 @@ body {
 
 .app-shell {
   width: 100%;
-  padding: 24px;
+  padding: 10px;
   display: grid;
-  gap: 24px;
+  gap: 10px;
   max-width: 1600px;
   margin: 0 auto;
 }
@@ -104,17 +133,17 @@ body {
 }
 
 .card-padding {
-  padding: 20px 24px;
+  padding: 10px;
 }
 
 /* Topbar */
 .topbar-card {
-  padding: 20px 24px;
+  padding: 5px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  gap: 5px;
 }
 
 .title-row {
@@ -252,6 +281,13 @@ button:disabled {
   background: var(--accent);
 }
 
+.theme-toggle-button {
+  width: 34px;
+  min-width: 34px;
+  padding-left: 0;
+  padding-right: 0;
+}
+
 #startButton {
   padding: 6px 16px;
 }
@@ -340,7 +376,7 @@ button:disabled {
 
 .output-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -353,6 +389,7 @@ button:disabled {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: linear-gradient(180deg, var(--bg-card), var(--bg-hover));
+  min-height: 236px;
 }
 
 .output-panel-head {
@@ -369,7 +406,9 @@ button:disabled {
 
 .output-path,
 .output-list {
-  min-height: 68px;
+  height: 136px;
+  min-height: 136px;
+  max-height: 136px;
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -381,6 +420,7 @@ button:disabled {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
+  overflow-y: auto;
 }
 
 .output-list {
@@ -569,6 +609,80 @@ input:focus {
   font-size: 12px;
 }
 
+.button-info {
+  background: var(--running-bg);
+  border-color: var(--running);
+  color: var(--running);
+}
+
+.button-info:hover:not(:disabled) {
+  background: var(--running);
+  color: #ffffff;
+}
+
+.button-success {
+  background: var(--success);
+  border-color: var(--success);
+  color: #ffffff;
+}
+
+.button-success:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+
+.button-success-soft {
+  background: var(--success-bg);
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.button-success-soft:hover:not(:disabled) {
+  background: var(--success);
+  color: #ffffff;
+}
+
+.button-warning {
+  background: var(--warning);
+  border-color: var(--warning);
+  color: #ffffff;
+}
+
+.button-warning:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+
+.button-warning-soft {
+  background: var(--warning-bg);
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+.button-warning-soft:hover:not(:disabled) {
+  background: var(--warning);
+  color: #ffffff;
+}
+
+.button-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #ffffff;
+}
+
+.button-danger:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+
+.button-danger-soft {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.button-danger-soft:hover:not(:disabled) {
+  background: var(--danger);
+  color: #ffffff;
+}
+
 /* SVG icon sizing */
 svg {
   width: 16px;
@@ -583,7 +697,7 @@ h2 svg {
 
 @media (max-width: 768px) {
   .app-shell {
-    padding: 16px;
+    padding: 5px;
   }
   
   .topbar-card {

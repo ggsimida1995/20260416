@@ -5,10 +5,20 @@ from pathlib import Path
 from src.config import APP_NAME, resolve_runtime_root
 
 
-def test_resolve_runtime_root_uses_current_workspace_when_not_frozen():
+def test_resolve_runtime_root_uses_user_data_dir_when_not_frozen(tmp_path: Path):
+    runtime_root = resolve_runtime_root(
+        frozen=False,
+        platform="win32",
+        env={"LOCALAPPDATA": str(tmp_path / "LocalAppData")},
+    )
+
+    assert runtime_root == tmp_path / "LocalAppData" / APP_NAME
+
+
+def test_resolve_runtime_root_uses_home_fallback_for_windows_source_runs():
     runtime_root = resolve_runtime_root(frozen=False, platform="win32", env={})
 
-    assert runtime_root == Path(".")
+    assert runtime_root == Path.home() / "AppData" / "Local" / APP_NAME
 
 
 def test_resolve_runtime_root_uses_local_appdata_for_frozen_windows(tmp_path: Path):

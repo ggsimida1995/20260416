@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
@@ -15,6 +18,9 @@ DATE_PATTERN = re.compile(
 
 
 def read_docx_text(path: Path) -> str:
+    if path.suffix.lower() == ".doc":
+        return read_doc_text(path)
+
     with ZipFile(path) as archive:
         xml = archive.read("word/document.xml")
     root = ET.fromstring(xml)
@@ -25,6 +31,14 @@ def read_docx_text(path: Path) -> str:
         if normalize_text(node.text)
     ]
     return " ".join(parts)
+
+
+def read_doc_text(path: Path) -> str:
+    for reader in (_read_doc_text_as_plain, _read_doc_text_with_textutil, _read_doc_text_with_antiword, _read_doc_text_with_soffice):
+        text = reader(path)
+        if text:
+            return text
+    raise RuntimeError(f"无法读取 .doc 文件，请安装 Microsoft Word/LibreOffice 或转换为 .docx: {path}")
 
 
 def parse_docx_text(text: str) -> DocxData:
@@ -54,6 +68,89 @@ def parse_docx_text(text: str) -> DocxData:
 
 def read_docx(path: Path) -> DocxData:
     return parse_docx_text(read_docx_text(path))
+
+
+def _read_doc_text_as_plain(path: Path) -> str:
+    data = path.read_bytes()
+    for encoding in ("utf-8", "gb18030", "utf-16"):
+        try:
+            text = data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        cleaned = _strip_rtf_markup(text) if text.lstrip().startswith("{\\rtf") else text
+        normalized = normalize_text(cleaned)
+        if _looks_like_doc_text(normalized):
+            return normalized
+    return ""
+
+
+def _read_doc_text_with_textutil(path: Path) -> str:
+    if shutil.which("textutil") is None:
+        return ""
+    try:
+        result = subprocess.run(
+            ["textutil", "-convert", "txt", "-stdout", str(path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception:
+        return ""
+    if result.returncode != 0:
+        return ""
+    return normalize_text(result.stdout)
+
+
+def _read_doc_text_with_antiword(path: Path) -> str:
+    if shutil.which("antiword") is None:
+        return ""
+    try:
+        result = subprocess.run(
+            ["antiword", str(path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception:
+        return ""
+    if result.returncode != 0:
+        return ""
+    return normalize_text(result.stdout)
+
+
+def _read_doc_text_with_soffice(path: Path) -> str:
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if soffice is None:
+        return ""
+    with tempfile.TemporaryDirectory(prefix="project-file-compare-doc-") as temp_dir:
+        try:
+            result = subprocess.run(
+                [soffice, "--headless", "--convert-to", "txt:Text", "--outdir", temp_dir, str(path)],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except Exception:
+            return ""
+        if result.returncode != 0:
+            return ""
+        output_path = Path(temp_dir) / f"{path.stem}.txt"
+        if not output_path.exists():
+            return ""
+        return normalize_text(output_path.read_text(encoding="utf-8", errors="ignore"))
+
+
+def _strip_rtf_markup(text: str) -> str:
+    text = re.sub(r"\\'[0-9a-fA-F]{2}", " ", text)
+    text = re.sub(r"\\[a-zA-Z]+\d* ?", " ", text)
+    return re.sub(r"[{}]", " ", text)
+
+
+def _looks_like_doc_text(text: str) -> bool:
+    return any(label in text for label in ("项目编号", "项目全称", "用户姓名", "联系电话", "竣工验收"))
 
 
 def _extract_value(text: str, label: str, stop_labels: list[str]) -> str:

@@ -14,14 +14,15 @@ from typing import Any, Callable
 
 import webview
 
-from src.config import APP_RUNTIME_ROOT, FILE_ROOT, PROCESSED_PROJECTS_PATH, SETTINGS_PATH
+from src.config import APP_RUNTIME_ROOT, FILE_ROOT, PROCESSED_PROJECTS_PATH, SETTINGS_PATH, SUCCESS_WORKBOOK_PATH, project_root
 from src.config_store import AISettings, AppSettings, load_settings, save_settings
 from src.hollysys_batch_download import SessionInspectionResult, inspect_local_hollysys_session
 from src.models import BatchWorkflowResult, WebPhaseResult, WorkflowResult
 from src.readers.signature_ai import is_remote_recognition_configured
 from src.workflow import run_batch_workflow, run_compare_workflow, run_download_workflow
+from src.writers.result_log_writer import clear_result_log, ensure_result_log, error_log_path, read_latest_log_items, success_log_path
 
-WINDOW_TITLE = "Project File Compare"
+WINDOW_TITLE = "项目资料比对助手"
 WINDOW_WIDTH = 1080
 WINDOW_HEIGHT = 760
 WINDOW_MIN_SIZE = (WINDOW_WIDTH, WINDOW_HEIGHT)
@@ -29,6 +30,7 @@ DEFAULT_SESSION_TIMEOUT_SECONDS = 4.0
 LOG_LIMIT = 500
 WEBUI_DIR = Path(__file__).with_name("webui")
 WEBVIEW2_CLIENT_ID = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+LEGACY_SETTINGS_PATH = Path("config") / "settings.json"
 
 
 def _platform_label() -> str:
@@ -249,6 +251,39 @@ def _inspect_session_with(
         )
 
 
+def _migrate_legacy_settings_if_needed(settings_path: Path) -> None:
+    legacy_path = LEGACY_SETTINGS_PATH
+    if settings_path == legacy_path or not legacy_path.exists():
+        return
+    try:
+        if settings_path.exists() and not _should_repair_settings_from_legacy(settings_path, legacy_path):
+            return
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(legacy_path.read_text(encoding="utf-8"), encoding="utf-8")
+    except Exception:
+        return
+
+
+def _should_repair_settings_from_legacy(settings_path: Path, legacy_path: Path) -> bool:
+    if not settings_path.exists():
+        return True
+    if settings_path != SETTINGS_PATH:
+        return False
+
+    current = load_settings(settings_path)
+    legacy = load_settings(legacy_path)
+    current_root = current.last_file_root
+    legacy_root = legacy.last_file_root
+    if not current_root or not legacy_root:
+        return False
+    return _is_pytest_temp_path(Path(current_root)) and Path(legacy_root).expanduser().exists()
+
+
+def _is_pytest_temp_path(path: Path) -> bool:
+    normalized = str(path.expanduser())
+    return "/pytest-of-" in normalized or "\\pytest-of-" in normalized
+
+
 def _execute_action(
     action: str,
     *,
@@ -271,6 +306,7 @@ def _execute_action(
         "errorProjectCodes": [],
         "errorReportPaths": [],
         "logPath": "",
+        "resultLogPath": "",
         "successCount": 0,
         "duplicateCount": 0,
         "failedCount": 0,
@@ -325,10 +361,19 @@ def _execute_action(
                 "outputs": {
                     **output_payload,
                     "successWorkbookPath": str(result.compare_success_workbook_path) if result.compare_success_workbook_path else "",
-                    "successProjectCodes": list(result.compare_success_project_codes),
-                    "errorProjectCodes": list(result.compare_error_project_codes),
+                    "successProjectCodes": _latest_or_current_log_items(
+                        result.success_log_path,
+                        list(result.compare_success_project_codes),
+                    ),
+                    "errorProjectCodes": _latest_or_current_log_items(
+                        result.error_log_path,
+                        list(result.compare_error_project_codes),
+                    ),
                     "errorReportPaths": [str(path) for path in result.compare_error_report_paths],
                     "logPath": str(result.log_path) if result.log_path else "",
+                    "resultLogPath": str(result.result_log_path) if result.result_log_path else "",
+                    "successLogPath": str(result.success_log_path) if result.success_log_path else "",
+                    "errorLogPath": str(result.error_log_path) if result.error_log_path else "",
                     "successCount": result.compare_appended_count,
                     "duplicateCount": result.compare_duplicate_count,
                     "failedCount": result.compare_failed_count,
@@ -374,10 +419,19 @@ def _execute_action(
             "outputs": {
                 **output_payload,
                 "successWorkbookPath": str(result.success_workbook_path) if result.success_workbook_path else "",
-                "successProjectCodes": list(result.success_project_codes),
-                "errorProjectCodes": list(result.error_project_codes),
+                "successProjectCodes": _latest_or_current_log_items(
+                    result.success_log_path,
+                    list(result.success_project_codes),
+                ),
+                "errorProjectCodes": _latest_or_current_log_items(
+                    result.error_log_path,
+                    list(result.error_project_codes),
+                ),
                 "errorReportPaths": [str(path) for path in result.error_report_paths],
                 "logPath": str(result.log_path) if result.log_path else "",
+                "resultLogPath": str(result.result_log_path) if result.result_log_path else "",
+                "successLogPath": str(result.success_log_path) if result.success_log_path else "",
+                "errorLogPath": str(result.error_log_path) if result.error_log_path else "",
                 "successCount": result.appended_count,
                 "duplicateCount": result.duplicate_count,
                 "failedCount": result.failed_count,
@@ -392,6 +446,13 @@ def _execute_action(
             "session_result": session_result,
             "outputs": output_payload,
         }
+
+
+def _latest_or_current_log_items(path: Path | None, current_items: list[str]) -> list[str]:
+    if path is None:
+        return current_items
+    latest_items = read_latest_log_items(path)
+    return latest_items or current_items
 
 
 def run_action_worker_process(
@@ -455,6 +516,7 @@ class WebviewApi:
 
         self._lock = threading.RLock()
         self.window: Any | None = None
+        _migrate_legacy_settings_if_needed(self.settings_path)
         self.settings = self._settings_loader(self.settings_path)
         if self.startup_in_background:
             self.desktop_runtime_check = _build_pending_check("桌面内核", "页面打开后后台检测")
@@ -478,6 +540,7 @@ class WebviewApi:
         self.busy_detail = ""
         self.action_process: Any | None = None
         self.output_summary = self._empty_output_summary()
+        self._load_latest_output_summary()
 
     def attach_window(self, window: Any) -> None:
         self.window = window
@@ -560,7 +623,12 @@ class WebviewApi:
     def open_path(self, raw_path: str) -> bool:
         if not raw_path:
             return False
-        self._open_path(Path(raw_path))
+        target = Path(raw_path)
+        if not target.exists() and target.name in {"success.log", "error.log"}:
+            ensure_result_log(target)
+        if not target.exists():
+            return False
+        self._open_path(target)
         return True
 
     def open_parent_path(self, raw_path: str) -> bool:
@@ -571,6 +639,23 @@ class WebviewApi:
         self._open_path(parent)
         return True
 
+    def clear_success_log(self) -> dict[str, Any]:
+        with self._lock:
+            clear_result_log(success_log_path(self._current_file_root()))
+            self.output_summary["successProjectCodes"] = []
+            self.output_summary["successLogPath"] = str(success_log_path(self._current_file_root()))
+            self.output_summary["successCount"] = 0
+            return self._build_state()
+
+    def clear_error_log(self) -> dict[str, Any]:
+        with self._lock:
+            clear_result_log(error_log_path(self._current_file_root()))
+            self.output_summary["errorProjectCodes"] = []
+            self.output_summary["errorLogPath"] = str(error_log_path(self._current_file_root()))
+            self.output_summary["duplicateCount"] = 0
+            self.output_summary["failedCount"] = 0
+            return self._build_state()
+
     def save_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
             if self._is_ui_busy():
@@ -578,11 +663,10 @@ class WebviewApi:
             self.settings = self._build_settings_from_payload(payload)
             self.output_summary = self._empty_output_summary()
             self._set_busy("settings", "正在保存设置", "检查资料目录并写入本地配置")
-            return_state = self._build_state()
 
-        worker = threading.Thread(target=self._run_save_settings_sync, daemon=True)
-        worker.start()
-        return return_state
+        self._run_save_settings_sync()
+        with self._lock:
+            return self._build_state()
 
     def _launch_action(self, action: str) -> dict[str, Any]:
         with self._lock:
@@ -915,10 +999,25 @@ class WebviewApi:
             "errorProjectCodes": [],
             "errorReportPaths": [],
             "logPath": "",
+            "resultLogPath": "",
+            "successLogPath": "",
+            "errorLogPath": "",
             "successCount": 0,
             "duplicateCount": 0,
             "failedCount": 0,
         }
+
+    def _load_latest_output_summary(self) -> None:
+        file_root = self._current_file_root()
+        self.output_summary = self._sanitize_output_summary(
+            {
+                **self.output_summary,
+                "successProjectCodes": read_latest_log_items(success_log_path(file_root)),
+                "errorProjectCodes": read_latest_log_items(error_log_path(file_root)),
+                "successLogPath": str(success_log_path(file_root)),
+                "errorLogPath": str(error_log_path(file_root)),
+            }
+        )
 
     def _sanitize_output_summary(self, payload: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -941,6 +1040,9 @@ class WebviewApi:
                 if isinstance(path, (str, Path)) and str(path)
             ],
             "logPath": str(payload.get("logPath", "") or ""),
+            "resultLogPath": str(payload.get("resultLogPath", "") or ""),
+            "successLogPath": str(payload.get("successLogPath", "") or ""),
+            "errorLogPath": str(payload.get("errorLogPath", "") or ""),
             "successCount": int(payload.get("successCount", 0) or 0),
             "duplicateCount": int(payload.get("duplicateCount", 0) or 0),
             "failedCount": int(payload.get("failedCount", 0) or 0),
@@ -948,25 +1050,46 @@ class WebviewApi:
 
     def _build_outputs_state(self) -> dict[str, Any]:
         file_root = self._current_file_root()
+        projects_root = project_root(file_root)
         success_dir = file_root / "success"
+        success_workbook_path = success_dir / SUCCESS_WORKBOOK_PATH.name
         error_dir = file_root / "error"
         log_dir = error_dir / "logs"
         summary = self.output_summary
         return {
             "mode": summary["mode"],
             "updatedAt": summary["updatedAt"],
-            "successWorkbookPath": summary["successWorkbookPath"],
+            "successWorkbookPath": summary["successWorkbookPath"] or str(success_workbook_path),
+            "successWorkbookExists": success_workbook_path.exists(),
             "successProjectCodes": list(summary["successProjectCodes"]),
             "errorProjectCodes": list(summary["errorProjectCodes"]),
+            "downloadedProjectNames": self._project_dir_names(projects_root),
             "successDir": str(success_dir),
             "errorReportPaths": list(summary["errorReportPaths"]),
             "errorDir": str(error_dir),
             "logPath": summary["logPath"],
+            "resultLogPath": summary["resultLogPath"],
+            "successLogPath": summary["successLogPath"] or str(success_log_path(file_root)),
+            "errorLogPath": summary["errorLogPath"] or str(error_log_path(file_root)),
             "logDir": str(log_dir),
+            "projectRoot": str(projects_root),
+            "projectCount": self._count_project_dirs(projects_root),
             "successCount": summary["successCount"],
             "duplicateCount": summary["duplicateCount"],
             "failedCount": summary["failedCount"],
         }
+
+    def _count_project_dirs(self, projects_root: Path) -> int:
+        try:
+            return sum(1 for path in projects_root.iterdir() if path.is_dir())
+        except OSError:
+            return 0
+
+    def _project_dir_names(self, projects_root: Path) -> list[str]:
+        try:
+            return sorted(path.name for path in projects_root.iterdir() if path.is_dir())
+        except OSError:
+            return []
 
     def _build_settings_from_payload(self, payload: dict[str, Any]) -> AppSettings:
         return AppSettings(
@@ -990,7 +1113,7 @@ class WebviewApi:
             return {
                 "windowTitle": WINDOW_TITLE,
                 "header": {
-                    "title": "Hollysys 批处理",
+                    "title": "项目资料比对助手",
                     "subtitle": "下载 / 比对 / 清理",
                 },
                 "status": {
@@ -1087,7 +1210,11 @@ class WebviewApi:
 
 
 def run_gui_app() -> int:
-    api = WebviewApi(startup_in_background=True)
+    api = WebviewApi(
+        settings_path=SETTINGS_PATH,
+        processed_projects_path=PROCESSED_PROJECTS_PATH,
+        startup_in_background=True,
+    )
     window = webview.create_window(
         WINDOW_TITLE,
         html=build_app_html(),

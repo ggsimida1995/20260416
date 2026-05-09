@@ -17,7 +17,7 @@ class RuntimeLogger(AbstractContextManager["RuntimeLogger"]):
 
         if self._log_path is not None:
             self._log_path.parent.mkdir(parents=True, exist_ok=True)
-            self._handle = self._log_path.open("w", encoding="utf-8")
+            self._handle = self._log_path.open("a", encoding="utf-8")
 
     @property
     def log_path(self) -> Path | None:
@@ -45,5 +45,5 @@ class RuntimeLogger(AbstractContextManager["RuntimeLogger"]):
 
 def build_log_path(file_root: Path) -> Path:
     log_dir = file_root / "error" / "logs"
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    return log_dir / f"workflow-{timestamp}.txt"
+    timestamp = datetime.now().strftime("%Y%m%d-%H")
+    return log_dir / f"workflow-{timestamp}.log"

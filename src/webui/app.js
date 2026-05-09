@@ -1,6 +1,7 @@
 const appBridge = {
   state: null,
   modalOpen: false,
+  themeStorageKey: 'project-file-compare-theme',
 
   bindEvents() {
     document.getElementById('startButton').addEventListener('click', () => this.callApi('handle_start_stop'));
@@ -9,16 +10,20 @@ const appBridge = {
     document.getElementById('refreshSessionButton').addEventListener('click', () => this.callApi('refresh_session'));
     document.getElementById('clearLogsButton').addEventListener('click', () => this.callApi('clear_logs'));
     document.getElementById('settingsButton').addEventListener('click', () => this.openSettings());
+    document.getElementById('themeToggleButton').addEventListener('click', () => this.toggleTheme());
     document.getElementById('closeSettingsButton').addEventListener('click', () => this.closeSettings());
     document.getElementById('cancelSettingsButton').addEventListener('click', () => this.closeSettings());
     document.getElementById('saveSettingsButton').addEventListener('click', () => this.saveSettings());
     document.getElementById('chooseDirButton').addEventListener('click', () => this.chooseFileRoot());
     document.getElementById('openDirButton').addEventListener('click', () => this.callApi('open_file_root'));
     document.getElementById('openDirInlineButton').addEventListener('click', () => this.callApi('open_file_root'));
-    document.getElementById('openSuccessWorkbookButton').addEventListener('click', () => this.openOutputFile('successWorkbookPath'));
-    document.getElementById('openSuccessWorkbookDirButton').addEventListener('click', () => this.openOutputDir('successWorkbookPath', 'successDir'));
-    document.getElementById('openFirstErrorReportButton').addEventListener('click', () => this.openFirstErrorReport());
-    document.getElementById('openErrorDirButton').addEventListener('click', () => this.openOutputPathValue(this.state?.outputs?.errorDir || ''));
+    document.getElementById('openDownloadedDirButton').addEventListener('click', () => this.openOutputDir('', 'projectRoot'));
+    document.getElementById('openSuccessWorkbookButton').addEventListener('click', () => this.openOutputFile('successLogPath'));
+    document.getElementById('openSuccessWorkbookDirButton').addEventListener('click', () => this.openOutputFile('successWorkbookPath'));
+    document.getElementById('clearSuccessLogButton').addEventListener('click', () => this.callApi('clear_success_log'));
+    document.getElementById('openFirstErrorReportButton').addEventListener('click', () => this.openOutputFile('errorLogPath'));
+    document.getElementById('openErrorDirButton').addEventListener('click', () => this.openOutputFile('errorLogPath'));
+    document.getElementById('clearErrorLogButton').addEventListener('click', () => this.callApi('clear_error_log'));
     document.getElementById('settingsModal').addEventListener('click', (event) => {
       if (event.target.id === 'settingsModal') {
         this.closeSettings();
@@ -27,9 +32,68 @@ const appBridge = {
   },
 
   async init() {
+    this.applySavedTheme();
     this.bindEvents();
+    this.syncThemeToggle();
     const state = await window.pywebview.api.bootstrap();
     this.sync(state);
+  },
+
+  applySavedTheme() {
+    const theme = this.getSavedTheme();
+    if (theme) {
+      document.documentElement.dataset.theme = theme;
+      return;
+    }
+    document.documentElement.removeAttribute('data-theme');
+  },
+
+  getSavedTheme() {
+    try {
+      const theme = localStorage.getItem(this.themeStorageKey);
+      return theme === 'light' || theme === 'dark' ? theme : '';
+    } catch (error) {
+      return '';
+    }
+  },
+
+  getEffectiveTheme() {
+    const explicitTheme = document.documentElement.dataset.theme;
+    if (explicitTheme === 'light' || explicitTheme === 'dark') {
+      return explicitTheme;
+    }
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      return 'dark';
+    }
+    return 'light';
+  },
+
+  toggleTheme() {
+    const nextTheme = this.getEffectiveTheme() === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = nextTheme;
+    try {
+      localStorage.setItem(this.themeStorageKey, nextTheme);
+    } catch (error) {
+      // Theme still switches for the current window even when storage is blocked.
+    }
+    this.syncThemeToggle();
+  },
+
+  syncThemeToggle() {
+    const button = document.getElementById('themeToggleButton');
+    const icon = document.getElementById('themeToggleIcon');
+    if (!button || !icon) {
+      return;
+    }
+
+    const isDark = this.getEffectiveTheme() === 'dark';
+    const nextLabel = isDark ? '白天' : '夜间';
+    const title = `切换到${nextLabel}模式`;
+    button.title = title;
+    button.setAttribute('aria-label', title);
+    icon.innerHTML = isDark
+      ? '<circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path>'
+      : '<path d="M12 3a6 6 0 0 0 9 7.5A9 9 0 1 1 12 3z"></path>';
   },
 
   sync(state) {
@@ -94,7 +158,9 @@ const appBridge = {
   },
 
   syncOutputs(outputs) {
-    const successWorkbookPath = outputs.successWorkbookPath || '';
+    const successLogPath = outputs.successLogPath || '';
+    const errorLogPath = outputs.errorLogPath || '';
+    const downloadedProjectNames = Array.isArray(outputs.downloadedProjectNames) ? outputs.downloadedProjectNames : [];
     const successProjectCodes = Array.isArray(outputs.successProjectCodes) ? outputs.successProjectCodes : [];
     const errorProjectCodes = Array.isArray(outputs.errorProjectCodes) ? outputs.errorProjectCodes : [];
     const errorReportPaths = Array.isArray(outputs.errorReportPaths) ? outputs.errorReportPaths : [];
@@ -103,6 +169,9 @@ const appBridge = {
     const successCount = Number(outputs.successCount || 0);
     const duplicateCount = Number(outputs.duplicateCount || 0);
     const failedCount = Number(outputs.failedCount || 0);
+    const projectCount = Number(outputs.projectCount || 0);
+
+    this.setBadge('projectCountBadge', `${projectCount} 个`, projectCount > 0 ? 'running' : 'idle');
 
     const outputMeta = document.getElementById('outputMeta');
     if (!mode) {
@@ -116,13 +185,25 @@ const appBridge = {
       outputMeta.innerText = parts.join(' | ');
     }
 
+    const downloadedProjectList = document.getElementById('downloadedProjectList');
+    if (downloadedProjectNames.length === 0) {
+      downloadedProjectList.classList.add('empty');
+      downloadedProjectList.textContent = '暂无已下载项目';
+    } else {
+      downloadedProjectList.classList.remove('empty');
+      downloadedProjectList.innerHTML = downloadedProjectNames.map((name, index) => {
+        const escaped = this.escapeHtml(name);
+        return `<div class="output-item"><span class="output-item-index">${index + 1}.</span><span>${escaped}</span></div>`;
+      }).join('');
+    }
+
     const successProjectCodeList = document.getElementById('successProjectCodeList');
     if (successProjectCodes.length === 0) {
       successProjectCodeList.classList.add('empty');
-      successProjectCodeList.textContent = successCount > 0 ? '本次已写入成功台账，但未拿到项目编号' : '暂无成功项目编号';
+      successProjectCodeList.textContent = successCount > 0 ? '本次已写入成功台账，但未拿到项目编号' : '暂无比对成功编号';
     } else {
       successProjectCodeList.classList.remove('empty');
-      successProjectCodeList.innerHTML = successProjectCodes.slice(0, 12).map((code, index) => {
+      successProjectCodeList.innerHTML = successProjectCodes.map((code, index) => {
         const escaped = this.escapeHtml(code);
         return `<div class="output-item"><span class="output-item-index">${index + 1}.</span><span>${escaped}</span></div>`;
       }).join('');
@@ -132,10 +213,10 @@ const appBridge = {
     const errorProjectCodeList = document.getElementById('errorProjectCodeList');
     if (errorProjectCodes.length === 0) {
       errorProjectCodeList.classList.add('empty');
-      errorProjectCodeList.textContent = duplicateCount > 0 || failedCount > 0 ? '本次应有失败项目，但未拿到项目编号' : '暂无失败项目编号';
+      errorProjectCodeList.textContent = duplicateCount > 0 || failedCount > 0 ? '本次应有失败项目，但未拿到项目编号' : '暂无比对失败编号';
     } else {
       errorProjectCodeList.classList.remove('empty');
-      errorProjectCodeList.innerHTML = errorProjectCodes.slice(0, 12).map((code, index) => {
+      errorProjectCodeList.innerHTML = errorProjectCodes.map((code, index) => {
         const escaped = this.escapeHtml(code);
         return `<div class="output-item"><span class="output-item-index">${index + 1}.</span><span>${escaped}</span></div>`;
       }).join('');
@@ -143,10 +224,13 @@ const appBridge = {
     const errorCount = errorProjectCodes.length || errorReportPaths.length || failedCount || duplicateCount;
     this.setBadge('errorReportBadge', `${errorCount} 个`, errorCount > 0 ? 'warning' : 'idle');
 
-    document.getElementById('openSuccessWorkbookButton').disabled = !successWorkbookPath;
-    document.getElementById('openSuccessWorkbookDirButton').disabled = !(successWorkbookPath || outputs.successDir);
-    document.getElementById('openFirstErrorReportButton').disabled = errorReportPaths.length === 0;
-    document.getElementById('openErrorDirButton').disabled = !(errorReportPaths.length > 0 || outputs.errorDir);
+    document.getElementById('openSuccessWorkbookButton').disabled = !successLogPath;
+    document.getElementById('openSuccessWorkbookDirButton').disabled = !outputs.successWorkbookExists;
+    document.getElementById('clearSuccessLogButton').disabled = !successLogPath;
+    document.getElementById('openFirstErrorReportButton').disabled = !errorLogPath;
+    document.getElementById('openErrorDirButton').disabled = !errorLogPath;
+    document.getElementById('clearErrorLogButton').disabled = !errorLogPath;
+    document.getElementById('openDownloadedDirButton').disabled = !outputs.projectRoot;
   },
 
   setBadge(id, text, tone) {
@@ -162,7 +246,7 @@ const appBridge = {
 
   async openOutputDir(pathKey, fallbackKey) {
     const outputs = this.state?.outputs || {};
-    const filePath = outputs[pathKey] || '';
+    const filePath = pathKey ? outputs[pathKey] || '' : '';
     const fallbackPath = outputs[fallbackKey] || '';
     if (filePath) {
       await window.pywebview.api.open_parent_path(filePath);
@@ -172,14 +256,6 @@ const appBridge = {
       return;
     }
     await window.pywebview.api.open_path(fallbackPath);
-  },
-
-  async openFirstErrorReport() {
-    const paths = this.state?.outputs?.errorReportPaths || [];
-    if (paths.length === 0) {
-      return;
-    }
-    await this.openOutputPathValue(paths[0]);
   },
 
   async openOutputPathValue(path) {

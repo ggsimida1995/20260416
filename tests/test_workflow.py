@@ -15,7 +15,7 @@ from src.workflow import run_workflow
 
 def build_project_tree(tmp_path: Path) -> Path:
     file_root = tmp_path / "file"
-    project_dir = file_root / "BHE-25030367-01"
+    project_dir = file_root / "project" / "BHE-25030367-01"
     success_dir = file_root / "success"
     error_dir = file_root / "error"
     other_dir = file_root / "other"
@@ -78,7 +78,7 @@ def build_success_workbook(path: Path) -> None:
     workbook.save(path)
 
 
-def test_run_workflow_processes_one_project_and_writes_error_on_failure(tmp_path: Path):
+def test_run_workflow_processes_one_project_and_writes_failure_to_result_log(tmp_path: Path):
     file_root = build_project_tree(tmp_path)
 
     result = run_workflow(file_root=file_root, username="user1", password="pass1")
@@ -88,8 +88,11 @@ def test_run_workflow_processes_one_project_and_writes_error_on_failure(tmp_path
     assert result.success_project_codes == []
     assert result.error_project_codes == ["BHE-25030367/01"]
     assert result.success_workbook_path == file_root / "success" / "2026年关闭满意度回访表0331.xlsx"
-    assert result.error_report_paths == [file_root / "error" / "BHE-25030367-01.txt"]
-    assert (file_root / "error" / "BHE-25030367-01.txt").exists()
+    assert result.error_report_paths == []
+    assert result.error_details
+    assert result.error_log_path == file_root / "result_logs" / "error.log"
+    assert result.error_log_path.exists()
+    assert not (file_root / "error" / "BHE-25030367-01.txt").exists()
 
 
 def test_run_workflow_emits_grouped_logs_and_persists_log_file(tmp_path: Path):
@@ -106,6 +109,7 @@ def test_run_workflow_emits_grouped_logs_and_persists_log_file(tmp_path: Path):
     joined = "\n".join(messages)
 
     assert "[PDF识别]" in joined
+    assert f"[运行] 项目目录: {file_root / 'project'}" in joined
     assert "[BHE-25030367/01------------开始------BHE-25030367/01]" in joined
     assert "[项目] BHE-25030367-01" in joined
     assert "[xlsx字段] 项目编号 = BHE-25030367/01" in joined
@@ -117,11 +121,18 @@ def test_run_workflow_emits_grouped_logs_and_persists_log_file(tmp_path: Path):
     assert result.log_path is not None
     assert result.log_path.exists()
     assert result.log_path.parent == file_root / "error" / "logs"
+    assert result.log_path.name.startswith("workflow-")
+    assert result.log_path.suffix == ".log"
+    assert result.success_log_path == file_root / "result_logs" / "success.log"
+    assert result.error_log_path == file_root / "result_logs" / "error.log"
+    assert result.error_log_path.exists()
     log_text = result.log_path.read_text(encoding="utf-8")
     assert "[BHE-25030367/01------------开始------BHE-25030367/01]" in log_text
     assert "[xlsx字段] 项目编号 = BHE-25030367/01" in log_text
     assert "[pdf字段] 签字人姓名 =" in log_text
     assert "[BHE-25030367/01------------结束------BHE-25030367/01]" in log_text
+    error_log_text = result.error_log_path.read_text(encoding="utf-8")
+    assert "BHE-25030367/01" in error_log_text
 
 
 def test_run_workflow_logs_remote_recognition_provider(monkeypatch, tmp_path: Path):
@@ -154,7 +165,7 @@ def test_run_workflow_logs_remote_recognition_provider(monkeypatch, tmp_path: Pa
     assert "图片上限=96KB" in joined
 
 
-def test_apply_prepared_result_records_duplicate_and_writes_error_report(monkeypatch, tmp_path: Path):
+def test_apply_prepared_result_records_duplicate_error_detail(monkeypatch, tmp_path: Path):
     messages: list[str] = []
 
     class FakeLogger:
@@ -170,7 +181,6 @@ def test_apply_prepared_result_records_duplicate_and_writes_error_report(monkeyp
     )
     result = workflow.WorkflowResult()
     success_workbook_path = tmp_path / "success" / "2026年关闭满意度回访表0331.xlsx"
-    error_root = tmp_path / "error"
 
     monkeypatch.setattr(
         workflow,
@@ -183,7 +193,6 @@ def test_apply_prepared_result_records_duplicate_and_writes_error_report(monkeyp
         prepared=prepared,
         result=result,
         success_workbook_path=success_workbook_path,
-        error_root=error_root,
     )
 
     assert result.appended_count == 0
@@ -192,18 +201,19 @@ def test_apply_prepared_result_records_duplicate_and_writes_error_report(monkeyp
     assert result.success_project_names == []
     assert result.success_project_codes == []
     assert result.error_project_codes == ["BHE-25030367/01"]
-    assert result.error_report_paths == [error_root / "BHE-25030367-01.txt"]
+    assert result.error_report_paths == []
+    assert result.error_details[0].project_code == "BHE-25030367/01"
+    assert result.error_details[0].message == "成功台账已存在相同项目编码，跳过追加"
     assert "[BHE-25030367/01------------开始------BHE-25030367/01]" in messages
     assert "[写入成功台账] 检测到重复项目编码，跳过追加" in messages
     assert "[BHE-25030367/01------------结束------BHE-25030367/01]" in messages
-    assert (error_root / "BHE-25030367-01.txt").exists() is True
 
 
 def test_run_workflow_prepares_multiple_projects_in_parallel(monkeypatch, tmp_path: Path):
     file_root = tmp_path / "file"
     (file_root / "success").mkdir(parents=True)
     (file_root / "error").mkdir(parents=True)
-    projects = [file_root / "P1", file_root / "P2", file_root / "P3"]
+    projects = [file_root / "project" / "P1", file_root / "project" / "P2", file_root / "project" / "P3"]
     for project_dir in projects:
         project_dir.mkdir(parents=True)
 
@@ -247,8 +257,8 @@ def test_run_batch_workflow_skips_projects_already_in_processed_state(tmp_path: 
     error_dir = file_root / "error"
     success_dir.mkdir(parents=True)
     error_dir.mkdir(parents=True)
-    project_a = file_root / "BHE-25030367-01"
-    project_b = file_root / "BHE-25030368-01"
+    project_a = file_root / "project" / "BHE-25030367-01"
+    project_b = file_root / "project" / "BHE-25030368-01"
     project_a.mkdir(parents=True)
     project_b.mkdir(parents=True)
 
@@ -284,7 +294,7 @@ def test_run_batch_workflow_starts_compare_only_after_web_phase_finishes(tmp_pat
     file_root = tmp_path / "file"
     (file_root / "success").mkdir(parents=True)
     (file_root / "error").mkdir(parents=True)
-    project_dir = file_root / "BHE-25030367-01"
+    project_dir = file_root / "project" / "BHE-25030367-01"
     project_dir.mkdir(parents=True)
 
     call_order: list[str] = []
@@ -317,7 +327,7 @@ def test_run_batch_workflow_deletes_successful_projects_and_marks_processed(tmp_
     file_root = tmp_path / "file"
     (file_root / "success").mkdir(parents=True)
     (file_root / "error").mkdir(parents=True)
-    project_dir = file_root / "BHE-25030367-01"
+    project_dir = file_root / "project" / "BHE-25030367-01"
     project_dir.mkdir(parents=True)
     processed_path = tmp_path / "config" / "processed_projects.json"
 
@@ -346,7 +356,7 @@ def test_run_batch_workflow_keeps_project_unprocessed_when_delete_fails(monkeypa
     file_root = tmp_path / "file"
     (file_root / "success").mkdir(parents=True)
     (file_root / "error").mkdir(parents=True)
-    project_dir = file_root / "BHE-25030367-01"
+    project_dir = file_root / "project" / "BHE-25030367-01"
     project_dir.mkdir(parents=True)
     processed_path = tmp_path / "config" / "processed_projects.json"
 
@@ -376,7 +386,7 @@ def test_run_batch_workflow_emits_stage_logs(tmp_path: Path):
     file_root = tmp_path / "file"
     (file_root / "success").mkdir(parents=True)
     (file_root / "error").mkdir(parents=True)
-    project_dir = file_root / "BHE-25030367-01"
+    project_dir = file_root / "project" / "BHE-25030367-01"
     project_dir.mkdir(parents=True)
     messages: list[str] = []
 
@@ -408,7 +418,7 @@ def test_run_batch_workflow_default_web_phase_rediscovers_downloaded_projects(mo
     file_root = tmp_path / "file"
     (file_root / "success").mkdir(parents=True)
     (file_root / "error").mkdir(parents=True)
-    downloaded_project = file_root / "BHE-25030367-01"
+    downloaded_project = file_root / "project" / "BHE-25030367-01"
 
     def fake_compare_runner(*, project_dirs, **kwargs):
         assert [project.name for project in project_dirs] == ["BHE-25030367-01"]
@@ -439,18 +449,18 @@ def test_run_batch_workflow_default_web_phase_rediscovers_downloaded_projects(mo
 def test_run_download_workflow_uses_direct_download_summary(monkeypatch, tmp_path: Path):
     file_root = tmp_path / "file"
     messages: list[str] = []
-    processed_codes = {"BHE-25040404-01"}
     captured: dict[str, object] = {}
 
-    def fake_download_batch(*, output_root, skip_project_codes=None, log_callback=None):
+    def fake_download_batch(*, output_root, summary_path=None, skip_project_codes=None, log_callback=None):
         captured["output_root"] = output_root
+        captured["summary_path"] = summary_path
         captured["skip_project_codes"] = skip_project_codes
         if log_callback is not None:
             log_callback("[网页阶段] 分类待办: 项目关闭工作流 | 2")
         return {
             "saved_project_dirs": [
-                str(file_root / "BHE-25080117-01"),
-                str(file_root / "LHE-25090012-B1"),
+                str(file_root / "project" / "BHE-25080117-01"),
+                str(file_root / "project" / "LHE-25090012-B1"),
             ],
             "skipped_projects": [
                 {"project_dir_name": "BHE-25040404-01"},
@@ -472,6 +482,7 @@ def test_run_download_workflow_uses_direct_download_summary(monkeypatch, tmp_pat
     assert result.processed_projects == ["BHE-25080117-01", "LHE-25090012-B1"]
     assert result.skipped_projects == ["BHE-25040404-01"]
     assert captured["output_root"] == file_root
+    assert captured["summary_path"] == file_root / "error" / "logs" / "hollysys-latest-batch-summary.json"
     assert captured["skip_project_codes"] == set()
     joined = "\n".join(messages)
     assert "[网页阶段] 分类待办: 项目关闭工作流 | 2" in joined

@@ -22,7 +22,7 @@ import requests
 from Crypto.Cipher import AES
 from lxml import html as lxml_html
 
-from src.config import DEBUG_ROOT, FILE_ROOT
+from src.config import DEBUG_ROOT, FILE_ROOT, project_root
 
 
 def _default_chrome_user_data_dir() -> Path:
@@ -438,7 +438,7 @@ def save_record(
     record: DetailRecord,
     output_root: Path,
 ) -> dict[str, Any]:
-    project_dir = output_root / normalize_project_code(record.project_code)
+    project_dir = project_root(output_root) / normalize_project_code(record.project_code)
     project_dir.mkdir(parents=True, exist_ok=True)
 
     selected_attachments = select_target_attachments(record.attachments)
@@ -496,7 +496,18 @@ def download_attachment(
     if _looks_like_html(content):
         raise ValueError(f"附件下载返回了 HTML 页面，疑似会话失效: {attachment.download_url}")
 
-    destination.write_bytes(content)
+    _write_bytes_atomically(destination, content)
+
+
+def _write_bytes_atomically(destination: Path, content: bytes) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = destination.with_name(f".{destination.name}.{os.getpid()}.part")
+    try:
+        temp_path.write_bytes(content)
+        temp_path.replace(destination)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
 
 
 def run_batch(
@@ -508,6 +519,7 @@ def run_batch(
     log_callback=None,
 ) -> dict[str, Any]:
     output_root.mkdir(parents=True, exist_ok=True)
+    project_root(output_root).mkdir(parents=True, exist_ok=True)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
 
     session = build_authenticated_session()

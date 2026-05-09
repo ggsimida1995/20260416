@@ -2,7 +2,7 @@ from pathlib import Path
 
 from docx import Document
 
-from src.readers.docx_reader import parse_docx_text, read_docx_text
+from src.readers.docx_reader import parse_docx_text, read_doc_text, read_docx_text
 from src.normalizers import normalize_date, normalize_phone, normalize_text
 
 
@@ -80,3 +80,16 @@ def test_read_docx_text_includes_table_cells(tmp_path: Path):
     assert "示例项目" in text
     assert "用户姓名" in text
     assert "黄汉民" in text
+
+
+def test_read_doc_text_supports_plain_text_doc(tmp_path: Path):
+    path = tmp_path / "项目竣工总结报告.doc"
+    path.write_text(
+        "项目编号：BHE-25030367/01 项目全称 示例项目 用户姓名 黄汉民 联系电话14714691425",
+        encoding="utf-8",
+    )
+
+    text = read_doc_text(path)
+
+    assert "项目编号" in text
+    assert "BHE-25030367/01" in text

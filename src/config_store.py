@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -58,10 +59,17 @@ def save_settings(
         last_file_root=last_file_root,
         ai=ai_settings or current.ai,
     )
-    path.write_text(
-        json.dumps(asdict(settings), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    _write_json_atomically(path, asdict(settings))
+
+
+def _write_json_atomically(path: Path, data: dict[str, object]) -> None:
+    payload = json.dumps(data, ensure_ascii=False, indent=2)
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with temp_path.open("w", encoding="utf-8") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    temp_path.replace(path)
 
 
 def _load_ai_settings(ai_data: dict[str, object]) -> AISettings:

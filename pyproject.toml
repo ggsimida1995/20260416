@@ -5,10 +5,13 @@ description = "Desktop tool for comparing project closeout files and appending s
 requires-python = ">=3.9"
 dependencies = [
   "openpyxl>=3.1,<4",
+  "xlrd>=2.0,<3",
   "python-docx>=1.1,<2",
   "PyMuPDF>=1.24,<2",
   "pywebview>=6.2,<7",
+  "Pillow>=10,<12",
   "requests>=2.32,<3",
+  "pypinyin>=0.53,<1",
   "lxml>=5,<6",
   "pycryptodome>=3.20,<4",
   "rapidocr-onnxruntime>=1.4,<2; python_version < '3.13'",

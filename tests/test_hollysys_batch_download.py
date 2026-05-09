@@ -8,10 +8,14 @@ import src.hollysys_batch_download as hollysys_module
 from lxml import html as lxml_html
 
 from src.hollysys_batch_download import (
+    AggregationCategory,
     Attachment,
+    DetailRecord,
+    TodoItem,
     extract_detail_field,
     extract_section_attachments,
     inspect_local_hollysys_session,
+    save_record,
     select_target_attachments,
 )
 
@@ -81,6 +85,99 @@ def test_select_target_attachments_skips_email_and_keeps_three_target_files():
     selected = select_target_attachments(attachments)
 
     assert [attachment.fd_id for attachment in selected] == ["fd_xlsx", "fd_docx", "fd_pdf"]
+
+
+def test_write_bytes_atomically_replaces_destination(tmp_path: Path):
+    destination = tmp_path / "downloaded.xlsx"
+    destination.write_bytes(b"old")
+
+    hollysys_module._write_bytes_atomically(destination, b"new")
+
+    assert destination.read_bytes() == b"new"
+    assert list(tmp_path.glob("*.part")) == []
+
+
+def test_write_bytes_atomically_removes_temp_file_on_failure(monkeypatch, tmp_path: Path):
+    destination = tmp_path / "downloaded.xlsx"
+    destination.write_bytes(b"old")
+
+    def fail_replace(self, target):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+
+    try:
+        hollysys_module._write_bytes_atomically(destination, b"new")
+    except OSError:
+        pass
+
+    assert destination.read_bytes() == b"old"
+    assert list(tmp_path.glob("*.part")) == []
+
+
+def test_save_record_writes_project_under_project_directory(monkeypatch, tmp_path: Path):
+    category = AggregationCategory("cat-1", "项目关闭工作流")
+    item = TodoItem(
+        category=category,
+        todo_fd_id="todo-1",
+        subject="待办",
+        detail_path="/sys/detail.do?fdId=detail-1",
+        project_code_hint="BHE-25030367/01",
+    )
+    record = DetailRecord(
+        item=item,
+        project_code="BHE-25030367/01",
+        project_name="示例项目",
+        attachments=(
+            Attachment("项目关闭移交登记表.xlsx", "fd-xlsx", "application/vnd.ms-excel", "10", "xlsx"),
+        ),
+    )
+
+    monkeypatch.setattr(
+        hollysys_module,
+        "download_attachment",
+        lambda session, attachment, destination, referer: destination.write_bytes(b"demo"),
+    )
+
+    saved = save_record(object(), record, tmp_path / "file")
+
+    project_dir = tmp_path / "file" / "project" / "BHE-25030367-01"
+    assert saved["project_dir"] == str(project_dir)
+    assert (project_dir / "项目关闭移交登记表.xlsx").exists()
+    assert (project_dir / "BHE-25030367-01.txt").exists()
+    assert not (tmp_path / "file" / "BHE-25030367-01").exists()
+
+
+def test_save_record_overwrites_existing_downloaded_files(monkeypatch, tmp_path: Path):
+    category = AggregationCategory("cat-1", "项目关闭工作流")
+    item = TodoItem(
+        category=category,
+        todo_fd_id="todo-1",
+        subject="待办",
+        detail_path="/sys/detail.do?fdId=detail-1",
+        project_code_hint="BHE-25030367/01",
+    )
+    record = DetailRecord(
+        item=item,
+        project_code="BHE-25030367/01",
+        project_name="示例项目",
+        attachments=(
+            Attachment("项目关闭移交登记表.xlsx", "fd-xlsx", "application/vnd.ms-excel", "10", "xlsx"),
+        ),
+    )
+    target = tmp_path / "file" / "project" / "BHE-25030367-01" / "项目关闭移交登记表.xlsx"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"old")
+
+    monkeypatch.setattr(
+        hollysys_module,
+        "download_attachment",
+        lambda session, attachment, destination, referer: hollysys_module._write_bytes_atomically(destination, b"new"),
+    )
+
+    save_record(object(), record, tmp_path / "file")
+
+    assert target.read_bytes() == b"new"
 
 
 def test_inspect_local_hollysys_session_reports_missing_cookie_db(tmp_path: Path):

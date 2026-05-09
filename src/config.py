@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Mapping
 
 
-RESERVED_DIRS = {"other", "success", "error"}
+PROJECTS_DIR_NAME = "project"
+RESERVED_DIRS = {"other", "success", "error", "result_logs", PROJECTS_DIR_NAME}
 APP_NAME = "ProjectFileCompare"
 
 
@@ -20,9 +21,6 @@ def resolve_runtime_root(
     is_frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
     active_platform = sys.platform if platform is None else platform
     active_env = os.environ if env is None else env
-
-    if not is_frozen:
-        return Path(".")
 
     if active_platform == "win32":
         local_app_data = active_env.get("LOCALAPPDATA")
@@ -53,7 +51,7 @@ STAMP_REQUIRED_AMOUNT = Decimal("50")
 REQUIRED_FILE_KEYWORDS = {
     "xlsx": "项目关闭移交登记表",
     "docx": "项目竣工总结报告",
-    "pdf": "PA竣工验收报告",
+    "pdf": ("PA竣工验收报告", "竣工验收报告", "验收报告"),
 }
 
 SUCCESS_FIELD_MAPPING = {
@@ -102,3 +100,7 @@ SUCCESS_FIELD_MAPPING = {
     "CRM有无信息关联主项目号": "CRM有无信息关联主项目号",
     "验收日期": "验收日期",
 }
+
+
+def project_root(file_root: Path) -> Path:
+    return file_root / PROJECTS_DIR_NAME

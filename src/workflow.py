@@ -9,10 +9,19 @@ from pathlib import Path
 from typing import Callable
 
 from src.compare import compare_project_data
-from src.config import PROCESSED_PROJECTS_PATH, SUCCESS_WORKBOOK_PATH
+from src.config import PROCESSED_PROJECTS_PATH, SUCCESS_WORKBOOK_PATH, project_root
 from src.config_store import AISettings
 from src.discovery import discover_project_files, discover_projects
-from src.models import BatchWorkflowResult, CompareFailure, DocxData, PdfData, ProjectFiles, WebPhaseResult, WorkflowResult
+from src.models import (
+    BatchWorkflowResult,
+    CompareFailure,
+    DocxData,
+    PdfData,
+    ProjectErrorDetail,
+    ProjectFiles,
+    WebPhaseResult,
+    WorkflowResult,
+)
 from src.process_state import mark_project_processed, processed_project_codes
 from src.readers.docx_reader import read_docx
 from src.hollysys_batch_download import run_batch as run_hollysys_download_batch
@@ -24,7 +33,7 @@ from src.readers.signature_ai import (
 )
 from src.readers.xlsx_reader import read_close_sheet
 from src.runtime_logging import RuntimeLogger, build_log_path
-from src.writers.error_writer import write_error_report
+from src.writers.result_log_writer import write_result_logs
 from src.writers.success_writer import append_success_row, build_success_row
 
 XLSX_LOG_FIELDS = ("项目编号", "项目全称", "用户联系人", "用户联系方式", "合同额（万元）")
@@ -70,13 +79,13 @@ def run_compare_workflow(
 
     result = WorkflowResult()
     success_workbook_path = file_root / "success" / SUCCESS_WORKBOOK_PATH.name
-    error_root = file_root / "error"
     result.success_workbook_path = success_workbook_path
     target_project_dirs = project_dirs if project_dirs is not None else discover_projects(file_root)
 
     with RuntimeLogger(build_log_path(file_root), callback=log_callback) as logger:
         result.log_path = logger.log_path
         logger.log(f"[运行] 资料目录: {file_root}")
+        logger.log(f"[运行] 项目目录: {project_root(file_root)}")
         if logger.log_path is not None:
             logger.log(f"[运行] 日志文件: {logger.log_path}")
         _log_pdf_recognition_status(logger, ai_settings)
@@ -96,13 +105,20 @@ def run_compare_workflow(
                 prepared=prepared,
                 result=result,
                 success_workbook_path=success_workbook_path,
-                error_root=error_root,
             )
 
         logger.section("[汇总]")
         logger.log(
             f"[汇总] 追加成功={result.appended_count} | 重复跳过={result.duplicate_count} | 失败={result.failed_count}"
         )
+        result.success_log_path, result.error_log_path = write_result_logs(
+            file_root=file_root,
+            success_project_codes=result.success_project_codes,
+            error_details=result.error_details,
+        )
+        result.result_log_path = result.error_log_path if result.error_details else result.success_log_path
+        logger.log(f"[成功日志] {result.success_log_path}")
+        logger.log(f"[失败日志] {result.error_log_path}")
 
     return result
 
@@ -167,8 +183,12 @@ def run_batch_workflow(
     result.compare_duplicate_count = compare_result.duplicate_count
     result.compare_failed_count = compare_result.failed_count
     result.log_path = compare_result.log_path
+    result.result_log_path = compare_result.result_log_path
+    result.success_log_path = compare_result.success_log_path
+    result.error_log_path = compare_result.error_log_path
     result.compare_success_project_codes = list(compare_result.success_project_codes)
     result.compare_error_project_codes = list(compare_result.error_project_codes)
+    result.compare_error_details = list(compare_result.error_details)
     result.compare_success_workbook_path = compare_result.success_workbook_path
     result.compare_error_report_paths = list(compare_result.error_report_paths)
     if log_callback is not None:
@@ -210,16 +230,15 @@ def run_download_workflow(
     log_callback: Callable[[str], None] | None = None,
     processed_projects_path: Path = PROCESSED_PROJECTS_PATH,
 ) -> WebPhaseResult:
-    del username, password
+    del username, password, processed_projects_path
 
-    processed_codes = processed_project_codes(processed_projects_path)
     return _run_web_phase(
         file_root=file_root,
         username="",
         password="",
         project_dirs=[],
         log_callback=log_callback,
-        processed_project_codes=processed_codes,
+        processed_project_codes=set(),
     )
 
 
@@ -305,16 +324,14 @@ def _apply_prepared_result(
     prepared: PreparedProjectResult,
     result: WorkflowResult,
     success_workbook_path: Path,
-    error_root: Path,
 ) -> None:
     _log_project_start(logger, prepared.project_code)
     for line in prepared.log_lines:
         logger.log(line)
 
     if prepared.status in {"missing_files", "compare_failed"}:
-        error_path = _write_prepared_error_report(logger, error_root, prepared.project_name, prepared.failures)
         result.error_project_codes.append(prepared.project_code)
-        result.error_report_paths.append(error_path)
+        result.error_details.extend(_build_project_error_details(prepared.project_code, prepared.failures))
         _log_project_end(logger, prepared.project_code)
         result.failed_count += 1
         return
@@ -322,14 +339,9 @@ def _apply_prepared_result(
     append_result = append_success_row(success_workbook_path, prepared.success_row)
     if append_result.status == "duplicate":
         logger.log("[写入成功台账] 检测到重复项目编码，跳过追加")
-        error_path = _write_prepared_error_report(
-            logger,
-            error_root,
-            prepared.project_name,
-            _build_duplicate_failures(prepared.success_row),
-        )
+        duplicate_failures = _build_duplicate_failures(prepared.success_row)
         result.error_project_codes.append(prepared.project_code)
-        result.error_report_paths.append(error_path)
+        result.error_details.extend(_build_project_error_details(prepared.project_code, duplicate_failures))
         _log_project_end(logger, prepared.project_code)
         result.duplicate_count += 1
         return
@@ -364,17 +376,6 @@ def _log_project_end(logger: RuntimeLogger, project_code: str) -> None:
     logger.log(f"[{project_code}------------结束------{project_code}]")
 
 
-def _write_prepared_error_report(
-    logger,
-    error_root: Path,
-    project_name: str,
-    failures: list[CompareFailure],
-) -> Path:
-    error_path = write_error_report(error_root, project_name, failures)
-    logger.log(f"[写入错误报告] {error_path}")
-    return error_path
-
-
 def _build_duplicate_failures(success_row: dict[str, object]) -> list[CompareFailure]:
     return [
         CompareFailure(
@@ -382,6 +383,18 @@ def _build_duplicate_failures(success_row: dict[str, object]) -> list[CompareFai
             message="成功台账已存在相同项目编码，跳过追加",
             values={"项目编码": success_row.get("项目编码")},
         )
+    ]
+
+
+def _build_project_error_details(project_code: str, failures: list[CompareFailure]) -> list[ProjectErrorDetail]:
+    return [
+        ProjectErrorDetail(
+            project_code=project_code,
+            field_name=failure.field_name,
+            message=failure.message,
+            values=failure.values,
+        )
+        for failure in failures
     ]
 
 
@@ -472,9 +485,13 @@ def _run_web_phase(
     del username, password, project_dirs
 
     summary = run_hollysys_download_batch(
-        output_root=file_root,
-        skip_project_codes=processed_project_codes or set(),
-        log_callback=log_callback,
+        **_call_with_supported_kwargs(
+            run_hollysys_download_batch,
+            output_root=file_root,
+            summary_path=_download_summary_path(file_root),
+            skip_project_codes=processed_project_codes or set(),
+            log_callback=log_callback,
+        )
     )
     processed_projects = [Path(project_dir).name for project_dir in summary.get("saved_project_dirs", [])]
     skipped_projects = [
@@ -486,6 +503,10 @@ def _run_web_phase(
         processed_projects=processed_projects,
         skipped_projects=skipped_projects,
     )
+
+
+def _download_summary_path(file_root: Path) -> Path:
+    return file_root / "error" / "logs" / "hollysys-latest-batch-summary.json"
 
 
 def _delete_project_dir(project_dir: Path) -> None:
