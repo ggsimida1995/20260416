@@ -1,0 +1,202 @@
+use crate::core::config::{app_state_db_path, default_settings, workspace_state_db_path};
+use crate::core::discovery::project_dir_names;
+use crate::core::download::{check_session_status, unchecked_session_status, SessionStatus};
+use crate::core::models::{AppSettings, WorkflowSummary};
+use crate::core::workflow::summary;
+use crate::db::app_state::AppStateStore;
+use serde::Serialize;
+use std::path::PathBuf;
+use tauri::AppHandle;
+use tauri_plugin_dialog::DialogExt;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppState {
+    pub window_title: String,
+    pub settings: AppSettings,
+    pub session: SessionStatus,
+    pub logs: Vec<String>,
+    pub outputs: WorkflowSummary,
+}
+
+#[tauri::command]
+pub fn bootstrap() -> Result<AppState, String> {
+    build_state().map_err(to_string)
+}
+
+#[tauri::command]
+pub fn save_settings(payload: AppSettings) -> Result<AppState, String> {
+    let settings = normalize_settings(payload);
+    AppStateStore::new(app_state_db_path())
+        .save_settings(&settings)
+        .map_err(to_string)?;
+    build_state().map_err(to_string)
+}
+
+#[tauri::command]
+pub fn open_file_root() -> Result<bool, String> {
+    let settings = load_settings().map_err(to_string)?;
+    open::that(settings.last_file_root).map_err(to_string)?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn open_path(path: String) -> Result<bool, String> {
+    if path.is_empty() {
+        return Ok(false);
+    }
+    open::that(path).map_err(to_string)?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn choose_file_root(app: AppHandle) -> Result<Option<String>, String> {
+    let selected = app
+        .dialog()
+        .file()
+        .blocking_pick_folder()
+        .map(|path| path.to_string());
+    Ok(selected)
+}
+
+#[tauri::command]
+pub async fn choose_browser_user_data_dir(app: AppHandle) -> Result<Option<String>, String> {
+    let selected = app
+        .dialog()
+        .file()
+        .blocking_pick_folder()
+        .map(|path| path.to_string());
+    Ok(selected)
+}
+
+#[tauri::command]
+pub async fn check_session() -> Result<SessionStatus, String> {
+    let settings = load_settings().map_err(to_string)?;
+    let status = tauri::async_runtime::spawn_blocking(move || check_session_status(&settings))
+        .await
+        .map_err(to_string)?;
+    Ok(status)
+}
+
+pub fn build_state() -> anyhow::Result<AppState> {
+    let settings = load_settings()?;
+    let file_root = PathBuf::from(&settings.last_file_root);
+    let runtime_store = AppStateStore::new(workspace_state_db_path(&file_root));
+    let logs = runtime_store.latest_runtime_logs(500).unwrap_or_default();
+    let outputs = summary(&file_root, "startup").unwrap_or_else(|_| WorkflowSummary {
+        mode: String::new(),
+        updated_at: String::new(),
+        success_project_codes: Vec::new(),
+        error_project_codes: Vec::new(),
+        success_count: 0,
+        pending_success_count: 0,
+        failed_count: 0,
+        project_count: project_dir_names(&file_root).len(),
+        downloaded_project_names: project_dir_names(&file_root),
+    });
+    let _ = std::fs::create_dir_all(&file_root);
+    Ok(AppState {
+        window_title: "项目资料比对助手".to_string(),
+        session: unchecked_session_status(&settings),
+        settings,
+        logs,
+        outputs,
+    })
+}
+
+pub fn load_settings() -> anyhow::Result<AppSettings> {
+    let store = AppStateStore::new(app_state_db_path());
+    let raw_settings = store.load_settings()?.unwrap_or_else(default_settings);
+    let settings = normalize_settings(raw_settings.clone());
+    store.save_settings(&settings)?;
+    Ok(settings)
+}
+
+fn normalize_settings(mut settings: AppSettings) -> AppSettings {
+    settings.last_file_root = normalize_file_root_path(&settings.last_file_root);
+    if settings.last_file_root.is_empty() {
+        settings.last_file_root = default_settings().last_file_root;
+    }
+    settings.browser_kind = normalize_browser_kind(&settings.browser_kind);
+    settings.browser_user_data_dir = settings.browser_user_data_dir.trim().to_string();
+    settings.browser_profile = normalize_browser_profile(&settings.browser_profile);
+    settings.browser_safe_storage_service = normalize_browser_safe_storage_service(
+        &settings.browser_kind,
+        &settings.browser_safe_storage_service,
+    );
+    settings.theme_mode = normalize_theme_mode(&settings.theme_mode);
+    if settings.request_timeout_seconds < 1 {
+        settings.request_timeout_seconds = 30;
+    }
+    if settings.image_max_kb < 20 {
+        settings.image_max_kb = 100;
+    }
+    settings
+}
+
+fn normalize_browser_kind(value: &str) -> String {
+    match value.trim().to_lowercase().as_str() {
+        "edge" | "microsoft_edge" | "microsoft-edge" => "edge".to_string(),
+        "chromium" => "chromium".to_string(),
+        "custom" | "custom_chromium" | "custom-chromium" => "custom".to_string(),
+        _ => "chrome".to_string(),
+    }
+}
+
+fn normalize_theme_mode(value: &str) -> String {
+    match value.trim().to_lowercase().as_str() {
+        "system" | "auto" | "跟随系统" => "system".to_string(),
+        "dark" | "night" | "夜间" => "dark".to_string(),
+        _ => "light".to_string(),
+    }
+}
+
+fn normalize_browser_profile(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        "auto".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn normalize_browser_safe_storage_service(kind: &str, value: &str) -> String {
+    let trimmed = value.trim();
+    if !trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+    match kind {
+        "edge" => "Microsoft Edge Safe Storage",
+        "chromium" | "custom" => "Chromium Safe Storage",
+        _ => "Chrome Safe Storage",
+    }
+    .to_string()
+}
+
+fn normalize_file_root_path(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let mut path = PathBuf::from(trimmed);
+    while path.file_name().is_some_and(is_project_dir_name)
+        && path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .is_some_and(is_project_dir_name)
+    {
+        path.pop();
+    }
+    path.to_string_lossy().to_string()
+}
+
+fn is_project_dir_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .map(|item| item.eq_ignore_ascii_case("project"))
+        .unwrap_or(false)
+}
+
+fn to_string(error: impl std::fmt::Display) -> String {
+    error.to_string()
+}

@@ -1,0 +1,51 @@
+[package]
+name = "project-file-compare"
+version = "0.1.0"
+description = "项目资料比对助手"
+authors = ["Project File Compare"]
+edition = "2021"
+
+[lib]
+name = "project_file_compare_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.4.1", features = [] }
+
+[dependencies]
+anyhow = "1.0.100"
+aes = "0.8.4"
+base64 = "0.22.1"
+calamine = { version = "0.31.0", features = ["chrono"] }
+cbc = "0.1.2"
+chrono = { version = "0.4.42", features = ["serde"] }
+dirs = "6.0.0"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
+open = "5.3.3"
+pbkdf2 = "0.12.2"
+pdfium-auto = { version = "0.3.0", features = ["bundled"] }
+pdfium-render = "0.8.37"
+pinyin = { version = "0.11.0", default-features = false, features = ["plain"] }
+quick-xml = "0.38.3"
+regex = "1.12.2"
+reqwest = { version = "0.12.24", features = ["blocking", "cookies", "json", "rustls-tls"], default-features = false }
+rusqlite = { version = "0.37.0", features = ["bundled", "chrono"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+sha1 = "0.10.6"
+sha2 = "0.10.9"
+tauri = { version = "2.8.5", features = [] }
+tauri-plugin-dialog = "2.4.0"
+tauri-plugin-opener = "2.5.0"
+thiserror = "2.0.17"
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros"] }
+umya-spreadsheet = "2.3.3"
+walkdir = "2.5.0"
+zip = "5.1.1"
+
+[target.'cfg(windows)'.dependencies]
+aes-gcm = "0.10.3"
+windows-sys = { version = "0.52.0", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Memory"] }
+
+[features]
+default = []

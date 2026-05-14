@@ -1,0 +1,28 @@
+{
+  "name": "project-file-compare-tauri",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "tauri": "cd .. && tauri",
+    "tauri:dev": "cd .. && tauri dev",
+    "tauri:build": "cd .. && tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/cli": "^2.11.0",
+    "@types/react": "18.3.27",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "^6.0.1",
+    "typescript": "5.9.3",
+    "vite": "^8.0.12"
+  },
+  "dependencies": {
+    "@arco-design/web-react": "^2.66.15",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  }
+}
