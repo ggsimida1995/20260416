@@ -1156,8 +1156,8 @@ fn read_windows_browser_master_key(browser: &BrowserConfig) -> Result<[u8; 16]> 
 
 #[cfg(windows)]
 fn crypt_unprotect_data(encrypted_value: &[u8]) -> Result<Vec<u8>> {
+    use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
-    use windows_sys::Win32::System::Memory::LocalFree;
 
     let mut input = CRYPT_INTEGER_BLOB {
         cbData: encrypted_value.len() as u32,

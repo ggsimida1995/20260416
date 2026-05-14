@@ -349,24 +349,23 @@ body {
 }
 
 .compare-log-table {
-  width: 100%;
-  min-width: 1060px;
+  width: max-content;
+  min-width: unset;
   border-collapse: collapse;
-  table-layout: fixed;
+  table-layout: auto;
   font-family: var(--font-ui);
   font-size: 10px;
-  line-height: 1.35;
+  line-height: 1.25;
 }
 
 .compare-log-table th,
 .compare-log-table td {
-  padding: 5px 6px;
+  padding: 2px 4px;
   border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   text-align: center;
   vertical-align: middle;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  white-space: nowrap;
 }
 
 .compare-log-table th {
