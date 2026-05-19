@@ -1,5 +1,7 @@
 use crate::core::models::DocxData;
-use crate::core::normalizers::{normalize_date, normalize_phone, normalize_project_code, normalize_text};
+use crate::core::normalizers::{
+    normalize_date, normalize_phone, normalize_project_code, normalize_text,
+};
 use anyhow::{anyhow, Context, Result};
 use quick_xml::events::Event;
 use quick_xml::Reader;
@@ -162,7 +164,11 @@ fn parse_docx_text(text: &str) -> DocxData {
 
     let (acceptance_start, acceptance_end) = extract_acceptance_range(&cleaned);
     DocxData {
-        project_code: normalize_project_code(&extract_value(&cleaned, "项目编号", &["报告日期", "项目全称"])),
+        project_code: normalize_project_code(&extract_value(
+            &cleaned,
+            "项目编号",
+            &["报告日期", "项目全称"],
+        )),
         project_name: extract_value(&cleaned, "项目全称", &["项目类型", "项目关注", "用户姓名"]),
         contact_names,
         contact_phones,
@@ -277,7 +283,7 @@ fn extract_date_after_label(text: &str, label: &str) -> Option<chrono::NaiveDate
 
 fn date_pattern() -> Option<Regex> {
     Regex::new(
-        r"(?:\d\s*){4}年\s*(?:\d\s*){1,2}月\s*(?:\d\s*){1,2}日|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}",
+        r"(?:\d\s*){4}年\s*(?:\d\s*){1,2}月\s*(?:\d\s*){1,2}日|(?:\d\s*){4}\s*[-/.]\s*(?:\d\s*){1,2}\s*[-/.]\s*(?:\d\s*){1,2}",
     )
     .ok()
 }
@@ -314,7 +320,10 @@ mod tests {
         );
 
         assert_eq!(data.project_code, "PHE-25080042/B1");
-        assert_eq!(data.project_name, "阜阳市淮河能源谢桥发电厂智慧控制系统工程项目");
+        assert_eq!(
+            data.project_name,
+            "阜阳市淮河能源谢桥发电厂智慧控制系统工程项目"
+        );
         assert_eq!(data.contact_names, vec!["张凡"]);
         assert_eq!(data.contact_phones, vec!["15720040243"]);
         assert_eq!(data.acceptance_start, NaiveDate::from_ymd_opt(2026, 4, 19));
@@ -331,5 +340,16 @@ mod tests {
 
         assert_eq!(data.acceptance_start, NaiveDate::from_ymd_opt(2026, 3, 10));
         assert_eq!(data.acceptance_end, NaiveDate::from_ymd_opt(2026, 4, 10));
+    }
+
+    #[test]
+    fn parses_split_hyphenated_acceptance_dates() {
+        let data = parse_docx_text(
+            "任务名称 开始时间 完成时间 参与人 预算工时 实际工时 \
+             竣工验收 20 26 - 4 - 1 6 20 26 - 4 - 16 赵洋",
+        );
+
+        assert_eq!(data.acceptance_start, NaiveDate::from_ymd_opt(2026, 4, 16));
+        assert_eq!(data.acceptance_end, NaiveDate::from_ymd_opt(2026, 4, 16));
     }
 }

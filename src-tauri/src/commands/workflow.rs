@@ -1,12 +1,11 @@
 use crate::commands::state::{build_state, load_settings};
-use crate::core::config::workspace_state_db_path;
+use crate::core::config::{ensure_workspace_layout, workspace_file_root, workspace_state_db_path};
 use crate::core::download::{check_session_status, run_download, DownloadSummary};
 use crate::core::models::WorkflowProgress;
 use crate::core::workflow::run_compare_with_progress;
 use crate::db::app_state::AppStateStore;
 use crate::writers::success_excel::{
-    export_error_records, export_pending_success_rows, export_result_history_records,
-    SuccessExportResult,
+    export_error_records, export_pending_success_rows, SuccessExportResult,
 };
 use std::any::Any;
 use std::collections::HashSet;
@@ -41,8 +40,8 @@ fn run_compare_only_inner(
     file_root: String,
     app: AppHandle,
 ) -> Result<crate::commands::state::AppState, String> {
-    let file_root = PathBuf::from(file_root);
-    run_compare_with_progress(&file_root, |progress| emit_progress(&app, progress))
+    let workspace_root = PathBuf::from(file_root);
+    run_compare_with_progress(&workspace_root, |progress| emit_progress(&app, progress))
         .map_err(to_string)?;
     build_state().map_err(to_string)
 }
@@ -51,17 +50,20 @@ fn run_batch_inner(
     file_root: String,
     app: AppHandle,
 ) -> Result<crate::commands::state::AppState, String> {
-    let file_root = PathBuf::from(file_root);
-    let store = AppStateStore::new(workspace_state_db_path(&file_root));
+    let workspace_root = PathBuf::from(file_root);
+    ensure_workspace_layout(&workspace_root).map_err(to_string)?;
+    let store = AppStateStore::new(workspace_state_db_path(&workspace_root));
     store
         .append_runtime_log("[网页阶段] 开始")
         .map_err(to_string)?;
-    let summary = run_download_guarded(&file_root, &store)?;
+    let summary = run_download_guarded(&workspace_root, &store)?;
     append_download_summary_logs(&store, &summary).map_err(to_string)?;
     store
         .append_runtime_log("[本地比对阶段] 开始")
         .map_err(to_string)?;
-    if let Err(error) = run_compare_with_progress(&file_root, |progress| emit_progress(&app, progress)) {
+    if let Err(error) =
+        run_compare_with_progress(&workspace_root, |progress| emit_progress(&app, progress))
+    {
         let message = error.to_string();
         let _ = store.append_runtime_log(&format!("[本地比对阶段] 失败: {message}"));
         return Err(message);
@@ -74,12 +76,13 @@ fn emit_progress(app: &AppHandle, progress: WorkflowProgress) {
 }
 
 fn run_download_only_inner(file_root: String) -> Result<crate::commands::state::AppState, String> {
-    let file_root = PathBuf::from(file_root);
-    let store = AppStateStore::new(workspace_state_db_path(&file_root));
+    let workspace_root = PathBuf::from(file_root);
+    ensure_workspace_layout(&workspace_root).map_err(to_string)?;
+    let store = AppStateStore::new(workspace_state_db_path(&workspace_root));
     store
         .append_runtime_log("[网页阶段] 开始")
         .map_err(to_string)?;
-    let summary = run_download_guarded(&file_root, &store)?;
+    let summary = run_download_guarded(&workspace_root, &store)?;
     append_download_summary_logs(&store, &summary).map_err(to_string)?;
     build_state().map_err(to_string)
 }
@@ -92,13 +95,6 @@ pub fn export_success_results(file_root: String) -> Result<SuccessExportResult, 
 #[tauri::command]
 pub fn export_error_results(file_root: String) -> Result<String, String> {
     export_error_records(&PathBuf::from(file_root))
-        .map(|path| path.to_string_lossy().to_string())
-        .map_err(to_string)
-}
-
-#[tauri::command]
-pub fn export_result_history(file_root: String, kind: String) -> Result<String, String> {
-    export_result_history_records(&PathBuf::from(file_root), &kind)
         .map(|path| path.to_string_lossy().to_string())
         .map_err(to_string)
 }
@@ -133,7 +129,7 @@ fn append_download_summary_logs(
 }
 
 fn run_download_guarded(
-    file_root: &PathBuf,
+    workspace_root: &PathBuf,
     store: &AppStateStore,
 ) -> Result<DownloadSummary, String> {
     let settings = load_settings().map_err(to_string)?;
@@ -151,10 +147,20 @@ fn run_download_guarded(
         return Err("未登录".to_string());
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
-        run_download(file_root, &HashSet::new(), &settings)
+        let file_root = workspace_file_root(workspace_root);
+        run_download(&file_root, &HashSet::new(), &settings)
     }));
     match result {
-        Ok(Ok(summary)) => Ok(summary),
+        Ok(Ok(summary)) => {
+            if let Some(error) = summary.errors.first() {
+                let message = format!("下载出现错误，已停止后续任务: {error}");
+                store
+                    .append_runtime_log(&format!("[网页阶段] 失败: {message}"))
+                    .map_err(to_string)?;
+                return Err(message);
+            }
+            Ok(summary)
+        }
         Ok(Err(error)) => {
             let message = error.to_string();
             store

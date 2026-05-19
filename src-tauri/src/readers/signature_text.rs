@@ -1,17 +1,12 @@
 use crate::core::models::PdfData;
-use crate::core::normalizers::{normalize_date, normalize_phone, normalize_project_code, normalize_text};
+use crate::core::normalizers::{
+    normalize_date, normalize_phone, normalize_project_code, normalize_text,
+};
 use regex::Regex;
 
 pub fn parse_signature_text(text: &str) -> PdfData {
     let cleaned = normalize_text(text);
-    let sign_date = Regex::new(
-        r"(?:\d\s*){4}年\s*(?:\d\s*){1,2}月\s*(?:\d\s*){1,2}日|\d{4}[-/]\d{1,2}[-/]\d{1,2}",
-    )
-    .ok()
-    .and_then(|re| {
-        re.find(&cleaned)
-            .and_then(|item| normalize_date(item.as_str()))
-    });
+    let sign_date = extract_signature_date(&cleaned);
 
     PdfData {
         project_code: extract_project_code(&cleaned),
@@ -38,7 +33,30 @@ pub fn parse_signature_text(text: &str) -> PdfData {
         signer_phone: extract_phone_after_labels(&cleaned, &["联系电话", "电话"]),
         sign_date,
         has_red_stamp: false,
+        signer_name_confidence: None,
+        signer_phone_confidence: None,
+        sign_date_confidence: None,
     }
+}
+
+fn extract_signature_date(text: &str) -> Option<chrono::NaiveDate> {
+    let direct = Regex::new(
+        r"(?:\d\s*){4}年\s*(?:\d\s*){1,2}月\s*(?:\d\s*){1,2}日|\d{4}[-/]\d{1,2}[-/]\d{1,2}",
+    )
+    .ok()
+    .and_then(|re| re.find(text).and_then(|item| normalize_date(item.as_str())));
+    if direct.is_some() {
+        return direct;
+    }
+
+    let reversed =
+        Regex::new(r"(?P<day>\d{1,2})\s*日\s*(?P<year>\d{4})\s*年\s*(?P<month>\d{1,2})\s*月")
+            .ok()?;
+    let captures = reversed.captures(text)?;
+    let year = captures.name("year")?.as_str().parse().ok()?;
+    let month = captures.name("month")?.as_str().parse().ok()?;
+    let day = captures.name("day")?.as_str().parse().ok()?;
+    chrono::NaiveDate::from_ymd_opt(year, month, day)
 }
 
 fn extract_project_code(text: &str) -> String {
@@ -96,4 +114,17 @@ fn extract_phone_after_labels(text: &str, labels: &[&str]) -> String {
         }
     }
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_signature_text;
+    use chrono::NaiveDate;
+
+    #[test]
+    fn parses_reversed_ocr_date() {
+        let data = parse_signature_text("工有 y 张 签字/盖章 山 花 11 电话： 16日 2026 年 4月");
+
+        assert_eq!(data.sign_date, NaiveDate::from_ymd_opt(2026, 4, 16));
+    }
 }

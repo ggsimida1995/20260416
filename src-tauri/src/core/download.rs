@@ -129,28 +129,33 @@ pub fn run_download(
     for (category_id, category_name) in AGGREGATION_CATEGORIES {
         let items = fetch_todo_items(&client, category_id, category_name)?;
         for item in items {
-            match fetch_detail_record(&client, item.clone()) {
-                Ok(record) => {
-                    let normalized_code = normalize_project_code(&record.project_code);
-                    if skip_project_codes.contains(&normalized_code) {
-                        summary.skipped_projects.push(normalized_code);
-                        continue;
-                    }
-                    match save_record(&client, &record, file_root) {
-                        Ok(path) => {
-                            summary.processed_count += 1;
-                            summary
-                                .saved_project_dirs
-                                .push(path.to_string_lossy().to_string());
-                        }
-                        Err(error) => summary
-                            .errors
-                            .push(format!("{} | {}", record.project_code, error)),
-                    }
+            let record = match fetch_detail_record(&client, item.clone()) {
+                Ok(record) => record,
+                Err(error) => {
+                    summary
+                        .errors
+                        .push(format!("{} | {}", item.detail_url(), error));
+                    return Ok(summary);
                 }
-                Err(error) => summary
-                    .errors
-                    .push(format!("{} | {}", item.detail_url(), error)),
+            };
+            let normalized_code = normalize_project_code(&record.project_code);
+            if skip_project_codes.contains(&normalized_code) {
+                summary.skipped_projects.push(normalized_code);
+                continue;
+            }
+            match save_record(&client, &record, file_root) {
+                Ok(path) => {
+                    summary.processed_count += 1;
+                    summary
+                        .saved_project_dirs
+                        .push(path.to_string_lossy().to_string());
+                }
+                Err(error) => {
+                    summary
+                        .errors
+                        .push(format!("{} | {}", record.project_code, error));
+                    return Ok(summary);
+                }
             }
         }
     }
@@ -331,7 +336,8 @@ fn verify_session_once(client: &Client, category_id: &str) -> Result<SessionIden
             if let Some(identity) = fetch_identity_from_pages(client) {
                 return Ok(identity);
             }
-            return Err(error).context("会话检测接口返回不是 JSON，已读取到 Cookie，但接口响应异常");
+            return Err(error)
+                .context("会话检测接口返回不是 JSON，已读取到 Cookie，但接口响应异常");
         }
     };
     if json_contains_expired_signal(&payload) {
@@ -621,19 +627,19 @@ fn select_target_attachments(attachments: &[Attachment]) -> Vec<&Attachment> {
     pick_best(
         &remaining,
         &mut selected,
-        &["项目关闭移交登记表"],
+        &["关闭移交登记表"],
         &[".xlsx", ".xls"],
     );
     pick_best(
         &remaining,
         &mut selected,
-        &["项目竣工总结报告"],
+        &["竣工总结报告"],
         &[".docx", ".doc"],
     );
     pick_best(
         &remaining,
         &mut selected,
-        &["验收报告", "开箱验收单", "开箱验收"],
+        &["竣工验收报告"],
         &[".pdf", ".jpg", ".jpeg", ".png"],
     );
     let mut seen = selected
@@ -1358,7 +1364,8 @@ fn json_contains_expired_signal(value: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        cookie_host_matches, extract_identity_from_text, extract_lui_user_name, looks_like_login_page,
+        cookie_host_matches, extract_identity_from_text, extract_lui_user_name,
+        looks_like_login_page,
     };
 
     #[test]

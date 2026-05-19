@@ -21,7 +21,6 @@ pub fn run() {
             commands::workflow::run_download_only,
             commands::workflow::export_success_results,
             commands::workflow::export_error_results,
-            commands::workflow::export_result_history,
             commands::workflow::clear_runtime_logs
         ])
         .run(tauri::generate_context!())

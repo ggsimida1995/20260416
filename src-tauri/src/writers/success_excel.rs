@@ -1,4 +1,6 @@
-use crate::core::config::{export_dir, success_workbook_path, workspace_state_db_path, SUCCESS_SHEET_NAME};
+use crate::core::config::{
+    export_dir, success_workbook_path, workspace_state_db_path, SUCCESS_SHEET_NAME,
+};
 use crate::db::app_state::AppStateStore;
 use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
@@ -83,27 +85,16 @@ pub fn export_pending_success_rows(file_root: &Path) -> Result<SuccessExportResu
 }
 
 pub fn export_error_records(file_root: &Path) -> Result<PathBuf> {
-    export_result_history_records(file_root, "error")
-}
-
-pub fn export_result_history_records(file_root: &Path, kind: &str) -> Result<PathBuf> {
-    let normalized_kind = match kind {
-        "success" => "success",
-        "error" => "error",
-        other => return Err(anyhow!("不支持的历史结果类型: {other}")),
-    };
     let store = AppStateStore::new(workspace_state_db_path(file_root));
-    let lines = store.latest_result_logs(normalized_kind, 100_000)?;
+    let lines = store
+        .latest_runtime_logs(100_000)?
+        .into_iter()
+        .filter(|line| line.contains("[项目比对]") && line.contains("\"passed\":false"))
+        .collect::<Vec<_>>();
     let dir = export_dir(file_root);
     std::fs::create_dir_all(&dir)?;
-    let prefix = if normalized_kind == "success" {
-        "compare-success-history"
-    } else {
-        "compare-error-history"
-    };
     let path = dir.join(format!(
-        "{}-{}.txt",
-        prefix,
+        "compare-error-current-{}.txt",
         chrono::Local::now().format("%Y%m%d-%H%M%S")
     ));
     std::fs::write(

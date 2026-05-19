@@ -35,11 +35,18 @@ pub fn normalize_phone(text: &str) -> String {
 }
 
 pub fn normalize_project_code(text: &str) -> String {
-    normalize_text(text).replace(' ', "").to_uppercase()
+    normalize_text(text)
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>()
+        .to_uppercase()
 }
 
 pub fn normalize_compact_text(text: &str) -> String {
-    normalize_text(text).replace(' ', "")
+    normalize_text(text)
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect()
 }
 
 pub fn normalize_date_value(value: Option<&Value>) -> Option<NaiveDate> {
@@ -50,7 +57,14 @@ pub fn normalize_date(text: &str) -> Option<NaiveDate> {
     let text = normalize_text(text);
     let compact_text = text.replace(' ', "");
     for value in [&text, &compact_text] {
-        for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"] {
+        for fmt in [
+            "%Y-%m-%d",
+            "%Y/%m/%d",
+            "%Y.%m.%d",
+            "%Y-%-m-%-d",
+            "%Y/%-m/%-d",
+            "%Y.%-m.%-d",
+        ] {
             if let Ok(date) = NaiveDate::parse_from_str(value, fmt) {
                 return Some(date);
             }
@@ -63,7 +77,23 @@ pub fn normalize_date(text: &str) -> Option<NaiveDate> {
         }
     }
 
-    for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"] {
+    if compact_text.len() == 8 && compact_text.chars().all(|ch| ch.is_ascii_digit()) {
+        let year = compact_text[0..4].parse().ok()?;
+        let month = compact_text[4..6].parse().ok()?;
+        let day = compact_text[6..8].parse().ok()?;
+        if let Some(date) = NaiveDate::from_ymd_opt(year, month, day) {
+            return Some(date);
+        }
+    }
+
+    for fmt in [
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%Y.%m.%d",
+        "%Y-%-m-%-d",
+        "%Y/%-m/%-d",
+        "%Y.%-m.%-d",
+    ] {
         if let Ok(date) = NaiveDate::parse_from_str(&text, fmt) {
             return Some(date);
         }

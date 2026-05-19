@@ -24,15 +24,6 @@ pub fn compare_project_data(
         ("xlsx", "docx"),
         None,
     );
-    compare_text_field(
-        &mut failures,
-        "项目编号",
-        xlsx_fields.get("项目编号"),
-        &pdf_data.project_code,
-        normalize_project_code,
-        ("xlsx", "pdf"),
-        None,
-    );
     if let Some(web_data) = web_data {
         compare_text_field(
             &mut failures,
@@ -98,8 +89,8 @@ pub fn compare_project_data(
         ("xlsx", "pdf"),
         None,
     );
-    compare_acceptance_time(&mut failures, xlsx_fields, docx_data, pdf_data);
     compare_acceptance_range(&mut failures, docx_data, pdf_data);
+    compare_acceptance_time(&mut failures, xlsx_fields, docx_data, pdf_data);
     compare_stamp_rule(&mut failures, xlsx_fields, pdf_data);
 
     CompareResult {
@@ -193,22 +184,31 @@ fn compare_acceptance_time(
     pdf_data: &PdfData,
 ) {
     let excel_date = xlsx_date(xlsx_fields, &["验收日期", "完成日期", "核实日期"]);
-    let docx_date = docx_data.acceptance_end;
+    let docx_start = docx_data.acceptance_start;
+    let docx_end = docx_data.acceptance_end;
     let pdf_date = pdf_data.sign_date;
 
     let Some(excel_date) = excel_date else {
         failures.push(CompareFailure {
             field_name: "验收时间".to_string(),
             message: "Excel 验收日期未识别".to_string(),
-            values: acceptance_values(None, docx_date, pdf_date, docx_data.acceptance_start),
+            values: acceptance_values(None, docx_end, pdf_date, docx_start),
         });
         return;
     };
-    let Some(docx_date) = docx_date else {
+    let Some(docx_start) = docx_start else {
         failures.push(CompareFailure {
             field_name: "验收时间".to_string(),
-            message: "Word 完成时间未识别".to_string(),
-            values: acceptance_values(Some(excel_date), None, pdf_date, docx_data.acceptance_start),
+            message: "Word 开始时间未识别，无法校验验收时间区间".to_string(),
+            values: acceptance_values(Some(excel_date), docx_end, pdf_date, None),
+        });
+        return;
+    };
+    let Some(docx_end) = docx_end else {
+        failures.push(CompareFailure {
+            field_name: "验收时间".to_string(),
+            message: "Word 完成时间未识别，无法校验验收时间区间".to_string(),
+            values: acceptance_values(Some(excel_date), None, pdf_date, Some(docx_start)),
         });
         return;
     };
@@ -216,23 +216,47 @@ fn compare_acceptance_time(
         failures.push(CompareFailure {
             field_name: "验收时间".to_string(),
             message: "PDF 手写日期未识别".to_string(),
-            values: acceptance_values(Some(excel_date), Some(docx_date), None, docx_data.acceptance_start),
+            values: acceptance_values(Some(excel_date), Some(docx_end), None, Some(docx_start)),
         });
         return;
     };
 
-    if excel_date == docx_date && docx_date == pdf_date {
+    if docx_start > docx_end || docx_data.has_invalid_acceptance_range {
+        failures.push(CompareFailure {
+            field_name: "验收时间".to_string(),
+            message: "Word 开始/完成时间区间无效，无法校验验收时间".to_string(),
+            values: acceptance_values(
+                Some(excel_date),
+                Some(docx_end),
+                Some(pdf_date),
+                Some(docx_start),
+            ),
+        });
+        return;
+    }
+
+    let mut outside_sources = Vec::new();
+    if !date_in_range(excel_date, docx_start, docx_end) {
+        outside_sources.push("Excel");
+    }
+    if !date_in_range(pdf_date, docx_start, docx_end) {
+        outside_sources.push("PDF");
+    }
+    if outside_sources.is_empty() {
         return;
     }
 
     failures.push(CompareFailure {
         field_name: "验收时间".to_string(),
-        message: "Excel、Word、PDF 验收时间不一致".to_string(),
+        message: format!(
+            "{} 验收时间不在 Word 开始/完成时间区间内",
+            outside_sources.join("、")
+        ),
         values: acceptance_values(
             Some(excel_date),
-            Some(docx_date),
+            Some(docx_end),
             Some(pdf_date),
-            docx_data.acceptance_start,
+            Some(docx_start),
         ),
     });
 }
@@ -256,18 +280,28 @@ fn compare_acceptance_range(
         return;
     }
 
-    let Some(start) = docx_data.acceptance_start else {
-        return;
-    };
-    let Some(end) = docx_data.acceptance_end else {
-        return;
-    };
-    if start > end {
-        failures.push(CompareFailure {
+    match (docx_data.acceptance_start, docx_data.acceptance_end) {
+        (None, None) => failures.push(CompareFailure {
+            field_name: "竣工验收时间区间".to_string(),
+            message: "Word 开始时间和完成时间未识别".to_string(),
+            values: acceptance_values(None, None, pdf_data.sign_date, None),
+        }),
+        (None, Some(end)) => failures.push(CompareFailure {
+            field_name: "竣工验收时间区间".to_string(),
+            message: "Word 开始时间未识别".to_string(),
+            values: acceptance_values(None, Some(end), pdf_data.sign_date, None),
+        }),
+        (Some(start), None) => failures.push(CompareFailure {
+            field_name: "竣工验收时间区间".to_string(),
+            message: "Word 完成时间未识别".to_string(),
+            values: acceptance_values(None, None, pdf_data.sign_date, Some(start)),
+        }),
+        (Some(start), Some(end)) if start > end => failures.push(CompareFailure {
             field_name: "竣工验收时间区间".to_string(),
             message: "开始时间晚于完成时间".to_string(),
             values: acceptance_values(None, Some(end), pdf_data.sign_date, Some(start)),
-        });
+        }),
+        _ => {}
     }
 }
 
@@ -322,6 +356,10 @@ fn xlsx_date(fields: &BTreeMap<String, Value>, names: &[&str]) -> Option<NaiveDa
     None
 }
 
+fn date_in_range(date: NaiveDate, start: NaiveDate, end: NaiveDate) -> bool {
+    date >= start && date <= end
+}
+
 fn date_value(value: Option<NaiveDate>) -> Value {
     value
         .map(|date| Value::String(date.to_string()))
@@ -331,4 +369,130 @@ fn date_value(value: Option<NaiveDate>) -> Value {
 #[allow(dead_code)]
 fn _normalize_date_from_value(value: Option<&Value>) -> Option<NaiveDate> {
     normalize_date_value(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compare_project_data;
+    use crate::core::models::{DocxData, PdfData};
+    use chrono::NaiveDate;
+    use serde_json::Value;
+    use std::collections::BTreeMap;
+
+    fn base_fields(amount: &str, acceptance_date: &str) -> BTreeMap<String, Value> {
+        BTreeMap::from([
+            (
+                "项目编号".to_string(),
+                Value::String("BHE-25090004-01".to_string()),
+            ),
+            (
+                "项目全称".to_string(),
+                Value::String("测试项目".to_string()),
+            ),
+            ("用户联系人".to_string(), Value::String("张三".to_string())),
+            (
+                "用户联系方式".to_string(),
+                Value::String("13800138000".to_string()),
+            ),
+            (
+                "验收日期".to_string(),
+                Value::String(acceptance_date.to_string()),
+            ),
+            (
+                "合同额（万元）".to_string(),
+                Value::String(amount.to_string()),
+            ),
+        ])
+    }
+
+    fn base_docx() -> DocxData {
+        DocxData {
+            project_code: "BHE-25090004-01".to_string(),
+            project_name: "测试项目".to_string(),
+            contact_names: vec!["张三".to_string()],
+            contact_phones: vec!["13800138000".to_string()],
+            acceptance_start: Some(NaiveDate::from_ymd_opt(2026, 4, 26).unwrap()),
+            acceptance_end: Some(NaiveDate::from_ymd_opt(2026, 4, 28).unwrap()),
+            has_invalid_acceptance_range: false,
+        }
+    }
+
+    fn base_pdf(date: NaiveDate, has_red_stamp: bool) -> PdfData {
+        PdfData {
+            project_code: "BHE-25090004-01".to_string(),
+            signer_name: "张三".to_string(),
+            signer_phone: "13800138000".to_string(),
+            sign_date: Some(date),
+            has_red_stamp,
+            signer_name_confidence: None,
+            signer_phone_confidence: None,
+            sign_date_confidence: None,
+        }
+    }
+
+    #[test]
+    fn acceptance_time_passes_when_excel_and_pdf_are_inside_word_range() {
+        let result = compare_project_data(
+            &base_fields("49", "2026-04-27"),
+            None,
+            &base_docx(),
+            &base_pdf(NaiveDate::from_ymd_opt(2026, 4, 27).unwrap(), false),
+        );
+        assert!(result.passed, "{:?}", result.failures);
+    }
+
+    #[test]
+    fn acceptance_time_fails_when_excel_is_outside_word_range() {
+        let result = compare_project_data(
+            &base_fields("49", "2026-05-01"),
+            None,
+            &base_docx(),
+            &base_pdf(NaiveDate::from_ymd_opt(2026, 4, 27).unwrap(), false),
+        );
+        assert!(!result.passed);
+        assert!(result
+            .failures
+            .iter()
+            .any(|failure| failure.field_name == "验收时间"));
+    }
+
+    #[test]
+    fn stamp_check_only_triggers_above_threshold() {
+        let result = compare_project_data(
+            &base_fields("60", "2026-04-27"),
+            None,
+            &base_docx(),
+            &base_pdf(NaiveDate::from_ymd_opt(2026, 4, 27).unwrap(), false),
+        );
+        assert!(result
+            .failures
+            .iter()
+            .any(|failure| failure.field_name == "盖章检查"));
+    }
+
+    #[test]
+    fn project_code_and_name_ignore_whitespace() {
+        let mut fields = base_fields("49", "2026-04-27");
+        fields.insert(
+            "项目编号".to_string(),
+            Value::String("BHE - 25090004 - 01".to_string()),
+        );
+        fields.insert(
+            "项目全称".to_string(),
+            Value::String("测试 项目".to_string()),
+        );
+        let mut docx = base_docx();
+        docx.project_code = "BHE-25090004-01".to_string();
+        docx.project_name = "测试项目".to_string();
+        let result = compare_project_data(
+            &fields,
+            None,
+            &docx,
+            &base_pdf(NaiveDate::from_ymd_opt(2026, 4, 27).unwrap(), false),
+        );
+        assert!(!result
+            .failures
+            .iter()
+            .any(|failure| failure.field_name == "项目编号" || failure.field_name == "项目全称"));
+    }
 }

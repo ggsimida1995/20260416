@@ -1,4 +1,7 @@
-use crate::core::config::{app_state_db_path, default_settings, workspace_state_db_path};
+use crate::core::config::{
+    app_state_db_path, default_settings, ensure_workspace_layout, workspace_file_root,
+    workspace_state_db_path,
+};
 use crate::core::discovery::project_dir_names;
 use crate::core::download::{check_session_status, unchecked_session_status, SessionStatus};
 use crate::core::models::{AppSettings, WorkflowSummary};
@@ -80,21 +83,19 @@ pub async fn check_session() -> Result<SessionStatus, String> {
 
 pub fn build_state() -> anyhow::Result<AppState> {
     let settings = load_settings()?;
-    let file_root = PathBuf::from(&settings.last_file_root);
-    let runtime_store = AppStateStore::new(workspace_state_db_path(&file_root));
+    let workspace_root = PathBuf::from(&settings.last_file_root);
+    ensure_workspace_layout(&workspace_root)?;
+    let file_root = workspace_file_root(&workspace_root);
+    let runtime_store = AppStateStore::new(workspace_state_db_path(&workspace_root));
     let logs = runtime_store.latest_runtime_logs(500).unwrap_or_default();
-    let outputs = summary(&file_root, "startup").unwrap_or_else(|_| WorkflowSummary {
+    let outputs = summary(&workspace_root, "startup").unwrap_or_else(|_| WorkflowSummary {
         mode: String::new(),
         updated_at: String::new(),
-        success_project_codes: Vec::new(),
-        error_project_codes: Vec::new(),
-        success_count: 0,
         pending_success_count: 0,
         failed_count: 0,
         project_count: project_dir_names(&file_root).len(),
         downloaded_project_names: project_dir_names(&file_root),
     });
-    let _ = std::fs::create_dir_all(&file_root);
     Ok(AppState {
         window_title: "项目资料比对助手".to_string(),
         session: unchecked_session_status(&settings),
@@ -178,23 +179,7 @@ fn normalize_file_root_path(value: &str) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
-
-    let mut path = PathBuf::from(trimmed);
-    while path.file_name().is_some_and(is_project_dir_name)
-        && path
-            .parent()
-            .and_then(|parent| parent.file_name())
-            .is_some_and(is_project_dir_name)
-    {
-        path.pop();
-    }
-    path.to_string_lossy().to_string()
-}
-
-fn is_project_dir_name(name: &std::ffi::OsStr) -> bool {
-    name.to_str()
-        .map(|item| item.eq_ignore_ascii_case("project"))
-        .unwrap_or(false)
+    PathBuf::from(trimmed).to_string_lossy().to_string()
 }
 
 fn to_string(error: impl std::fmt::Display) -> String {

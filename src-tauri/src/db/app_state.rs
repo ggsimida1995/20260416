@@ -1,10 +1,11 @@
-use crate::core::models::{AppSettings, ProjectErrorDetail};
+use crate::core::models::{AppSettings, PdfData};
 use anyhow::{Context, Result};
 use chrono::Local;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -72,82 +73,29 @@ impl AppStateStore {
         Ok(())
     }
 
-    pub fn append_result_logs(
-        &self,
-        success_project_codes: &[String],
-        error_details: &[ProjectErrorDetail],
-        success_records: &[SuccessRecord],
-    ) -> Result<()> {
+    pub fn append_success_record(&self, record: &SuccessRecord) -> Result<()> {
         let mut connection = self.connect()?;
         let tx = connection.transaction()?;
         let now = timestamp();
-
-        for code in success_project_codes {
-            tx.execute(
-                "INSERT INTO result_logs(kind, rendered, project_code, field_name, message, values_json, created_at)
-                 VALUES ('success', ?1, ?2, '', '', '{}', ?3)",
-                params![format!("{now} | {code}"), code, now],
-            )?;
-        }
-
-        for detail in error_details {
-            tx.execute(
-                "INSERT INTO result_logs(kind, rendered, project_code, field_name, message, values_json, created_at)
-                 VALUES ('error', ?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    format_error_line(&now, detail),
-                    detail.project_code,
-                    detail.field_name,
-                    detail.message,
-                    serde_json::to_string(&detail.values)?,
-                    now
-                ],
-            )?;
-        }
-
-        for record in success_records {
-            tx.execute(
-                "INSERT INTO success_records(project_code, project_name, row_json, status, created_at, updated_at, exported_at)
-                 VALUES (?1, ?2, ?3, 'pending', ?4, ?5, NULL)
-                 ON CONFLICT(project_code) DO UPDATE SET
-                   project_name = excluded.project_name,
-                   row_json = excluded.row_json,
-                   status = 'pending',
-                   updated_at = excluded.updated_at,
-                   exported_at = NULL",
-                params![
-                    record.project_code,
-                    record.project_name,
-                    serde_json::to_string(&record.row_data)?,
-                    now,
-                    now
-                ],
-            )?;
-        }
-
+        tx.execute(
+            "INSERT INTO success_records(project_code, project_name, row_json, status, created_at, updated_at, exported_at)
+             VALUES (?1, ?2, ?3, 'pending', ?4, ?5, NULL)
+             ON CONFLICT(project_code) DO UPDATE SET
+               project_name = excluded.project_name,
+               row_json = excluded.row_json,
+               status = 'pending',
+               updated_at = excluded.updated_at,
+               exported_at = NULL",
+            params![
+                record.project_code,
+                record.project_name,
+                serde_json::to_string(&record.row_data)?,
+                now,
+                now
+            ],
+        )?;
         tx.commit()?;
         Ok(())
-    }
-
-    pub fn latest_result_logs(&self, kind: &str, limit: i64) -> Result<Vec<String>> {
-        let connection = self.connect()?;
-        let mut statement = connection.prepare(
-            "SELECT rendered FROM result_logs WHERE kind = ?1 ORDER BY id DESC LIMIT ?2",
-        )?;
-        let rows = statement.query_map(params![kind, limit], |row| row.get::<_, String>(0))?;
-        let mut items = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-        items.reverse();
-        Ok(items)
-    }
-
-    pub fn count_result_logs(&self, kind: &str) -> Result<usize> {
-        let connection = self.connect()?;
-        let count: i64 = connection.query_row(
-            "SELECT COUNT(*) FROM result_logs WHERE kind = ?1",
-            params![kind],
-            |row| row.get(0),
-        )?;
-        Ok(count as usize)
     }
 
     pub fn pending_success_records(&self) -> Result<Vec<SuccessRecord>> {
@@ -199,6 +147,48 @@ impl AppStateStore {
         Ok(())
     }
 
+    pub fn load_pdf_recognition_cache(
+        &self,
+        file_path: &Path,
+        fingerprint: &str,
+    ) -> Result<Option<PdfData>> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT data_json FROM pdf_recognition_cache WHERE file_path = ?1 AND fingerprint = ?2",
+        )?;
+        let mut rows = statement.query(params![file_path.to_string_lossy(), fingerprint])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let data_json: String = row.get(0)?;
+        Ok(serde_json::from_str(&data_json).ok())
+    }
+
+    pub fn save_pdf_recognition_cache(
+        &self,
+        file_path: &Path,
+        fingerprint: &str,
+        data: &PdfData,
+    ) -> Result<()> {
+        let connection = self.connect()?;
+        let now = timestamp();
+        connection.execute(
+            "INSERT INTO pdf_recognition_cache(file_path, fingerprint, data_json, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(file_path) DO UPDATE SET
+               fingerprint = excluded.fingerprint,
+               data_json = excluded.data_json,
+               updated_at = excluded.updated_at",
+            params![
+                file_path.to_string_lossy(),
+                fingerprint,
+                serde_json::to_string(data)?,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
     fn connect(&self) -> Result<Connection> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)
@@ -222,16 +212,6 @@ impl AppStateStore {
               message TEXT NOT NULL,
               created_at TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS result_logs (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              kind TEXT NOT NULL,
-              rendered TEXT NOT NULL,
-              project_code TEXT NOT NULL,
-              field_name TEXT NOT NULL,
-              message TEXT NOT NULL,
-              values_json TEXT NOT NULL,
-              created_at TEXT NOT NULL
-            );
             CREATE TABLE IF NOT EXISTS success_records (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               project_code TEXT NOT NULL UNIQUE,
@@ -242,34 +222,15 @@ impl AppStateStore {
               updated_at TEXT NOT NULL,
               exported_at TEXT
             );
+            CREATE TABLE IF NOT EXISTS pdf_recognition_cache (
+              file_path TEXT PRIMARY KEY,
+              fingerprint TEXT NOT NULL,
+              data_json TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
             ",
         )?;
         Ok(connection)
-    }
-}
-
-fn format_error_line(timestamp: &str, detail: &ProjectErrorDetail) -> String {
-    let values = if detail.values.is_empty() {
-        String::new()
-    } else {
-        let rendered = detail
-            .values
-            .iter()
-            .map(|(key, value)| format!("{key}={}", value_to_string(value)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!(" | {rendered}")
-    };
-    format!(
-        "{} | {} | {} | {}{}",
-        timestamp, detail.project_code, detail.field_name, detail.message, values
-    )
-}
-
-fn value_to_string(value: &Value) -> String {
-    match value {
-        Value::String(text) => text.clone(),
-        other => other.to_string(),
     }
 }
 

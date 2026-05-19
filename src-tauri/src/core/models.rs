@@ -66,6 +66,7 @@ pub struct AppSettings {
 #[derive(Debug, Clone, Default)]
 pub struct ProjectFiles {
     pub project_name: String,
+    pub project_dir: PathBuf,
     pub xlsx_path: Option<PathBuf>,
     pub docx_path: Option<PathBuf>,
     pub pdf_path: Option<PathBuf>,
@@ -102,6 +103,21 @@ pub struct PdfData {
     pub signer_phone: String,
     pub sign_date: Option<NaiveDate>,
     pub has_red_stamp: bool,
+    #[serde(default)]
+    pub signer_name_confidence: Option<f64>,
+    #[serde(default)]
+    pub signer_phone_confidence: Option<f64>,
+    #[serde(default)]
+    pub sign_date_confidence: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PdfRecognitionContext {
+    pub candidate_names: Vec<String>,
+    pub candidate_phones: Vec<String>,
+    pub excel_acceptance_date: Option<NaiveDate>,
+    pub acceptance_start: Option<NaiveDate>,
+    pub acceptance_end: Option<NaiveDate>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,9 +148,6 @@ pub struct ProjectErrorDetail {
 pub struct WorkflowSummary {
     pub mode: String,
     pub updated_at: String,
-    pub success_project_codes: Vec<String>,
-    pub error_project_codes: Vec<String>,
-    pub success_count: usize,
     pub pending_success_count: usize,
     pub failed_count: usize,
     pub project_count: usize,

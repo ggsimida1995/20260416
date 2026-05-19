@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 pub fn read_web_txt(path: &Path) -> Result<WebData> {
-    let content =
-        std::fs::read_to_string(path).with_context(|| format!("无法读取网页详情文件: {}", path.display()))?;
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("无法读取网页详情文件: {}", path.display()))?;
     Ok(parse_web_txt(&content))
 }
 

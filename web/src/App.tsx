@@ -54,9 +54,6 @@ type Settings = {
 type Outputs = {
   mode: string;
   updatedAt: string;
-  successProjectCodes: string[];
-  errorProjectCodes: string[];
-  successCount: number;
   pendingSuccessCount: number;
   failedCount: number;
   projectCount: number;
@@ -94,7 +91,6 @@ type SuccessExportResult = {
 type BusyState = { active: boolean; text: string };
 type ActionOptions = { showProgress?: boolean; log?: boolean; toast?: boolean; resetLogs?: boolean };
 type SyncOptions = { resetLogs?: boolean; replaceLogs?: boolean };
-type ResultHistoryKind = 'success' | 'error';
 type ProjectCompareLogRow = {
   fileName: string;
   projectCode: string;
@@ -148,9 +144,6 @@ const emptySettings: Settings = {
 const emptyOutputs: Outputs = {
   mode: '',
   updatedAt: '',
-  successProjectCodes: [],
-  errorProjectCodes: [],
-  successCount: 0,
   pendingSuccessCount: 0,
   failedCount: 0,
   projectCount: 0,
@@ -313,6 +306,15 @@ export default function App() {
     return state?.settings.lastFileRoot || '';
   }
 
+  function currentDownloadRoot(): string {
+    const root = currentFileRoot().replace(/[\\/]+$/, '');
+    if (!root) {
+      return '';
+    }
+    const separator = root.includes('\\') ? '\\' : '/';
+    return `${root}${separator}file`;
+  }
+
   async function runPlainAction(
     runningText: string,
     successText: string,
@@ -465,7 +467,7 @@ export default function App() {
   }
 
   async function openDownloadedDir(): Promise<void> {
-    await runPlainAction('打开中', '目录已打开', () => call<boolean>('open_path', { path: currentFileRoot() }), { log: false });
+    await runPlainAction('打开中', '目录已打开', () => call<boolean>('open_path', { path: currentDownloadRoot() }), { log: false });
   }
 
   async function clearRuntimeLogs(): Promise<void> {
@@ -489,13 +491,6 @@ export default function App() {
   async function exportError(): Promise<void> {
     await runPlainAction('导出中', '导出完成', async () => {
       const path = await call<string>('export_error_results', { fileRoot: currentFileRoot() });
-      await call<boolean>('open_path', { path });
-    }, { log: false });
-  }
-
-  async function exportHistory(kind: ResultHistoryKind): Promise<void> {
-    await runPlainAction('导出中', '导出完成', async () => {
-      const path = await call<string>('export_result_history', { fileRoot: currentFileRoot(), kind });
       await call<boolean>('open_path', { path });
     }, { log: false });
   }
@@ -568,12 +563,6 @@ export default function App() {
             <Button size="mini" status="warning" icon={<IconExport />} disabled={isBusy || outputs.failedCount === 0} onClick={() => void exportError()}>
               导出异常
             </Button>
-            <Button size="mini" status="success" icon={<IconExport />} disabled={isBusy || outputs.successCount === 0} onClick={() => void exportHistory('success')}>
-              成功历史
-            </Button>
-            <Button size="mini" status="danger" icon={<IconExport />} disabled={isBusy || outputs.failedCount === 0} onClick={() => void exportHistory('error')}>
-              失败历史
-            </Button>
             <Button size="mini" status="danger" icon={<IconDelete />} disabled={isBusy || !logs.length} onClick={() => void clearRuntimeLogs()}>
               清空日志
             </Button>
@@ -616,7 +605,7 @@ export default function App() {
           <TabPane key="basic" title="基础设置">
             <div className="settings-pane">
               <Form layout="horizontal" labelAlign="left" labelCol={{ span: 5 }} wrapperCol={{ span: 19 }} colon={false}>
-                <Form.Item label="保存目录">
+                <Form.Item label="工作目录">
                   <Input
                     value={settingsDraft.lastFileRoot}
                     onChange={(value) => patchSettings('lastFileRoot', value)}
@@ -727,8 +716,8 @@ function CompareLogTable({ log }: { log: ProjectCompareLog }) {
               <th>项目全称</th>
               <th>用户姓名</th>
               <th>联系电话</th>
-              <th>验收时间</th>
               <th>开始时间</th>
+              <th>验收时间</th>
               <th>金额</th>
               <th>是否有红章</th>
             </tr>
@@ -741,8 +730,8 @@ function CompareLogTable({ log }: { log: ProjectCompareLog }) {
                 <td>{valueOrDash(row.projectName)}</td>
                 <td>{valueOrDash(row.contactName)}</td>
                 <td>{valueOrDash(row.contactPhone)}</td>
-                <td>{valueOrDash(row.acceptanceTime)}</td>
                 <td>{valueOrDash(row.startTime)}</td>
+                <td>{valueOrDash(row.acceptanceTime)}</td>
                 <td>{valueOrDash(row.amount || '')}</td>
                 <td>{valueOrDash(row.hasRedStamp || '')}</td>
               </tr>

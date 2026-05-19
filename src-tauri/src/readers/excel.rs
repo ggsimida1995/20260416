@@ -1,4 +1,5 @@
 use crate::core::models::ProjectExtraction;
+use crate::core::normalizers::normalize_date_value;
 use anyhow::{Context, Result};
 use calamine::{open_workbook_auto, Data, DataType, Reader};
 use serde_json::Value;
@@ -191,11 +192,25 @@ fn data_to_json(cell: Option<&Data>) -> Value {
 
 fn data_to_json_for_field(field_name: &str, cell: Option<&Data>) -> Value {
     if is_date_field(field_name) {
-        if let Some(date) = cell.and_then(DataType::as_date) {
+        let raw_value = data_to_json(cell);
+        if let Some(date) = normalize_date_value(Some(&raw_value)) {
+            return Value::String(date.to_string());
+        }
+        if let Some(date) = excel_serial_date(cell) {
             return Value::String(date.to_string());
         }
     }
     data_to_json(cell)
+}
+
+fn excel_serial_date(cell: Option<&Data>) -> Option<chrono::NaiveDate> {
+    let cell = cell?;
+    match cell {
+        Data::DateTime(_) | Data::DateTimeIso(_) => cell.as_date(),
+        Data::Int(value) if (20_000..=80_000).contains(value) => cell.as_date(),
+        Data::Float(value) if (20_000.0..=80_000.0).contains(value) => cell.as_date(),
+        _ => None,
+    }
 }
 
 fn is_date_field(field_name: &str) -> bool {
@@ -208,9 +223,9 @@ fn is_meaningful_value(value: &Value) -> bool {
         Value::String(text) => {
             let normalized = text.trim();
             !normalized.is_empty()
-                && !known_field_names()
-                    .iter()
-                    .any(|field_name| normalize_field_label(field_name) == normalize_field_label(normalized))
+                && !known_field_names().iter().any(|field_name| {
+                    normalize_field_label(field_name) == normalize_field_label(normalized)
+                })
                 && !reserved_values().contains(normalized)
         }
         _ => true,
@@ -234,7 +249,8 @@ fn data_to_string(cell: Option<&Data>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::read_close_sheet;
+    use super::{data_to_json_for_field, read_close_sheet};
+    use calamine::Data;
     use serde_json::Value;
     use std::path::Path;
 
@@ -262,6 +278,37 @@ mod tests {
         assert_eq!(
             fields.get("验收日期"),
             Some(&Value::String("2026-05-27".to_string()))
+        );
+    }
+
+    #[test]
+    fn parses_compact_numeric_acceptance_date() {
+        assert_eq!(
+            data_to_json_for_field("验收日期", Some(&Data::Int(20260318))),
+            Value::String("2026-03-18".to_string())
+        );
+        assert_eq!(
+            data_to_json_for_field("验收日期", Some(&Data::Float(20260318.0))),
+            Value::String("2026-03-18".to_string())
+        );
+    }
+
+    #[test]
+    fn reads_bhe_25110271_acceptance_date() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("file/project/BHE-25110271-01/BHE-2511027101 PHE-25120009B1 项目关闭移交登记表.xlsx");
+        if !path.exists() {
+            return;
+        }
+
+        let fields = read_close_sheet(&path).unwrap().raw_fields;
+        assert_eq!(
+            fields.get("验收日期"),
+            Some(&Value::String("2026-03-18".to_string()))
         );
     }
 }
