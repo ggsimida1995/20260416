@@ -1190,7 +1190,7 @@ fn crypt_unprotect_data(encrypted_value: &[u8]) -> Result<Vec<u8>> {
     let result =
         unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
     unsafe {
-        LocalFree(output.pbData as isize);
+        LocalFree(output.pbData.cast());
     }
     Ok(result)
 }
