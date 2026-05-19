@@ -50,12 +50,12 @@ jobs:
 
       - name: Build Tauri App
         working-directory: web
-        run: npm run tauri:build -- --target ${{ matrix.target }} --bundles nsis
+        run: npm run tauri:build -- --target ${{ matrix.target }} --no-bundle
 
-      - name: Upload Bundles
+      - name: Upload Executable
         uses: actions/upload-artifact@v7
         with:
           name: project-file-compare-windows-${{ matrix.arch }}
           path: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
+            src-tauri/target/${{ matrix.target }}/release/project-file-compare.exe
           if-no-files-found: error
