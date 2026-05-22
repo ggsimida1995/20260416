@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "项目资料比对助手",
+  "productName": "ProjectFileCompare",
   "version": "0.1.0",
   "identifier": "com.fyx.projectfilecompare",
   "build": {
