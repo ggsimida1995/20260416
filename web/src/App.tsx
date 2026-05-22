@@ -26,8 +26,7 @@ import {
   Statistic,
   Radio,
   Collapse
-} from '@arco-design/web-react';
-import {
+} from '@arco-design/web-react';import {
   IconCheckCircle,
   IconDelete,
   IconDownload,
@@ -58,10 +57,6 @@ type Settings = {
   ocrApiKey: string;
   requestTimeoutSeconds: number;
   imageMaxKb: number;
-  browserKind: string;
-  browserUserDataDir: string;
-  browserProfile: string;
-  browserSafeStorageService: string;
   themeMode: string;
 };
 
@@ -78,9 +73,6 @@ type SessionStatus = {
   state: string;
   message: string;
   browserName: string;
-  userDataDir: string;
-  profile: string;
-  cookieDb: string;
   account: string;
   displayName: string;
   checkedAt: string;
@@ -148,10 +140,6 @@ const emptySettings: Settings = {
   ocrApiKey: '',
   requestTimeoutSeconds: 30,
   imageMaxKb: 100,
-  browserKind: 'chrome',
-  browserUserDataDir: '',
-  browserProfile: 'auto',
-  browserSafeStorageService: 'Chrome Safe Storage',
   themeMode: 'light'
 };
 
@@ -167,21 +155,11 @@ const emptyOutputs: Outputs = {
 const emptySession: SessionStatus = {
   state: 'unknown',
   message: '',
-  browserName: '浏览器',
-  userDataDir: '',
-  profile: 'auto',
-  cookieDb: '',
+  browserName: '内置 WebView',
   account: '',
   displayName: '',
   checkedAt: ''
 };
-
-const browserOptions = [
-  { label: 'Google Chrome', value: 'chrome' },
-  { label: 'Microsoft Edge', value: 'edge' },
-  { label: 'Chromium', value: 'chromium' },
-  { label: '自定义 Chromium', value: 'custom' }
-];
 
 const themeOptions = [
   { label: '白天', value: 'light' },
@@ -268,6 +246,29 @@ export default function App() {
   useEffect(() => {
     return applyTheme(settings.themeMode);
   }, [settings.themeMode]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return () => undefined;
+    }
+    let unlisten: UnlistenFn | null = null;
+    let mounted = true;
+    void listen('auth://cookies-updated', () => {
+      if (mounted) {
+        void refreshSessionAfterLogin();
+      }
+    }).then((handler) => {
+      if (mounted) {
+        unlisten = handler;
+      } else {
+        handler();
+      }
+    });
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, []);
 
   // 解析出所有的比对日志，提供统一过滤器
   const allParsedLogs = useMemo(() => {
@@ -434,6 +435,40 @@ export default function App() {
     }, options);
   }
 
+  async function openLoginWindow(): Promise<void> {
+    try {
+      await call<void>('open_login_window');
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  async function logout(): Promise<void> {
+    try {
+      await call<void>('clear_login');
+      await call<void>('close_login_window');
+      appendUiLog('已退出登录');
+      Message.success('已退出登录');
+      void refreshSession(false);
+    } catch (error) {
+      reportError(error);
+    }
+  }
+
+  async function refreshSessionAfterLogin(): Promise<void> {
+    try {
+      const nextSession = await call<SessionStatus>('check_session');
+      setState((previous) => previous ? { ...previous, session: nextSession } : previous);
+      if (nextSession.state === 'ok') {
+        await call<void>('close_login_window').catch(() => undefined);
+        appendUiLog(`登录成功：${nextSession.displayName || nextSession.account || ''}`);
+        Message.success('登录成功');
+      }
+    } catch {
+      // ignore — user may still be on the login page
+    }
+  }
+
   async function refreshSession(showGlobalStatus = true): Promise<void> {
     try {
       const nextSession = await call<SessionStatus>('check_session');
@@ -450,10 +485,7 @@ export default function App() {
           session: {
             state: 'missing',
             message: '未登录',
-            browserName: previous.settings.browserKind || '浏览器',
-            userDataDir: previous.settings.browserUserDataDir || '',
-            profile: previous.settings.browserProfile || 'auto',
-            cookieDb: '',
+            browserName: '内置 WebView',
             account: '',
             displayName: '',
             checkedAt: ''
@@ -466,9 +498,6 @@ export default function App() {
   function openSettings(): void {
     setSettingsDraft({
       ...settings,
-      browserKind: normalizeBrowserKind(settings.browserKind),
-      browserProfile: settings.browserProfile || 'auto',
-      browserSafeStorageService: settings.browserSafeStorageService || defaultSafeStorageService(settings.browserKind),
       themeMode: normalizeThemeMode(settings.themeMode)
     });
     setSettingsVisible(true);
@@ -485,13 +514,6 @@ export default function App() {
     }
   }
 
-  async function chooseBrowserUserDataDir(): Promise<void> {
-    const selected = await call<string | null>('choose_browser_user_data_dir');
-    if (selected) {
-      patchSettings('browserUserDataDir', selected);
-    }
-  }
-
   async function saveSettings(): Promise<void> {
     const payload: Settings = {
       lastFileRoot: settingsDraft.lastFileRoot.trim(),
@@ -503,10 +525,6 @@ export default function App() {
       ocrApiKey: settingsDraft.ocrApiKey.trim(),
       requestTimeoutSeconds: Number(settingsDraft.requestTimeoutSeconds || 30),
       imageMaxKb: Number(settingsDraft.imageMaxKb || 100),
-      browserKind: normalizeBrowserKind(settingsDraft.browserKind),
-      browserUserDataDir: settingsDraft.browserUserDataDir.trim(),
-      browserProfile: settingsDraft.browserProfile.trim() || 'auto',
-      browserSafeStorageService: settingsDraft.browserSafeStorageService.trim(),
       themeMode: normalizeThemeMode(settingsDraft.themeMode)
     };
     await runPlainAction('保存中', '设置已保存', async () => {
@@ -656,21 +674,41 @@ export default function App() {
             <div className="console-section">
               <div className="console-section-head">
                 <span className="console-section-title">会话状态</span>
-                <Button
-                  size="mini"
-                  type="text"
-                  icon={<IconRefresh />}
-                  loading={session.state === 'checking'}
-                  onClick={() => void refreshSession()}
-                >
-                  刷新
-                </Button>
+                <Space size={4}>
+                  <Button
+                    size="mini"
+                    type="text"
+                    icon={<IconRefresh />}
+                    loading={session.state === 'checking'}
+                    onClick={() => void refreshSession()}
+                  >
+                    刷新
+                  </Button>
+                  <Button
+                    size="mini"
+                    type="text"
+                    disabled={session.state === 'checking'}
+                    onClick={() => void openLoginWindow()}
+                  >
+                    {isSessionReady ? '重新登录' : '登录系统'}
+                  </Button>
+                  {isSessionReady && (
+                    <Button
+                      size="mini"
+                      type="text"
+                      status="danger"
+                      onClick={() => void logout()}
+                    >
+                      退出
+                    </Button>
+                  )}
+                </Space>
               </div>
               <Alert
                 type={session.state === 'ok' ? 'success' : (session.state === 'checking' ? 'info' : 'warning')}
                 showIcon
                 title={session.state === 'ok' ? '和利时系统联通正常' : (session.state === 'checking' ? '检测中...' : '会话失效/未登录')}
-                content={session.state === 'ok' ? `${session.displayName || session.account}已成功同步` : session.message || '请确保目标浏览器已正常登录OA系统'}
+                content={session.state === 'ok' ? `${session.displayName || session.account}已成功同步` : session.message || '点击右上「登录系统」按钮在内置窗口完成登录'}
               />
               {isSessionReady && (
                 <Descriptions
@@ -968,55 +1006,6 @@ export default function App() {
               </Form>
             </div>
           </TabPane>
-          <TabPane key="browser" title="浏览器设置">
-            <div className="settings-pane">
-              <Form layout="horizontal" labelAlign="left" labelCol={{ span: 5 }} wrapperCol={{ span: 19 }} colon={false}>
-                <Form.Item label="浏览器">
-                  <Select
-                    value={settingsDraft.browserKind}
-                    options={browserOptions}
-                    onChange={(value) => {
-                      const browserKind = normalizeBrowserKind(String(value));
-                      setSettingsDraft((current) => ({
-                        ...current,
-                        browserKind,
-                        browserSafeStorageService: current.browserSafeStorageService || defaultSafeStorageService(browserKind)
-                      }));
-                    }}
-                  />
-                </Form.Item>
-                <Collapse bordered={false} style={{ background: 'transparent' }}>
-                  <Collapse.Item
-                    name="advanced"
-                    header="高级设置（一般无需修改）"
-                  >
-                    <Form.Item label="数据目录">
-                      <Input
-                        value={settingsDraft.browserUserDataDir}
-                        placeholder="留空使用默认目录"
-                        onChange={(value) => patchSettings('browserUserDataDir', value)}
-                        addAfter={<Button size="small" type="primary" onClick={() => void chooseBrowserUserDataDir()}>选择</Button>}
-                      />
-                    </Form.Item>
-                    <Form.Item label="Profile">
-                      <Input
-                        value={settingsDraft.browserProfile}
-                        placeholder="auto / Default / Profile 1"
-                        onChange={(value) => patchSettings('browserProfile', value)}
-                      />
-                    </Form.Item>
-                    <Form.Item label="钥匙串服务">
-                      <Input
-                        value={settingsDraft.browserSafeStorageService}
-                        placeholder="Chrome Safe Storage"
-                        onChange={(value) => patchSettings('browserSafeStorageService', value)}
-                      />
-                    </Form.Item>
-                  </Collapse.Item>
-                </Collapse>
-              </Form>
-            </div>
-          </TabPane>
           <TabPane key="recognition" title="识别设置">
             <div className="settings-pane">
               <Alert
@@ -1268,17 +1257,3 @@ function applyTheme(mode: string): () => void {
   return () => undefined;
 }
 
-function normalizeBrowserKind(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'edge' || normalized === 'microsoft_edge' || normalized === 'microsoft-edge') return 'edge';
-  if (normalized === 'chromium') return 'chromium';
-  if (normalized === 'custom' || normalized === 'custom_chromium' || normalized === 'custom-chromium') return 'custom';
-  return 'chrome';
-}
-
-function defaultSafeStorageService(kind: string): string {
-  const normalized = normalizeBrowserKind(kind);
-  if (normalized === 'edge') return 'Microsoft Edge Safe Storage';
-  if (normalized === 'chromium' || normalized === 'custom') return 'Chromium Safe Storage';
-  return 'Chrome Safe Storage';
-}

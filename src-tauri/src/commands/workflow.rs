@@ -134,10 +134,7 @@ fn run_download_guarded(
 ) -> Result<DownloadSummary, String> {
     let settings = load_settings().map_err(to_string)?;
     store
-        .append_runtime_log(&format!(
-            "[网页阶段] 初始化 {} 会话",
-            browser_label(&settings.browser_kind)
-        ))
+        .append_runtime_log("[网页阶段] 初始化会话")
         .map_err(to_string)?;
     let session = check_session_status(&settings);
     if session.state != "ok" {
@@ -175,14 +172,6 @@ fn run_download_guarded(
                 .map_err(to_string)?;
             Err(message)
         }
-    }
-}
-
-fn browser_label(kind: &str) -> &'static str {
-    match kind.trim().to_lowercase().as_str() {
-        "edge" | "microsoft_edge" | "microsoft-edge" => "Edge",
-        "chromium" => "Chromium",
-        _ => "Chrome",
     }
 }
 

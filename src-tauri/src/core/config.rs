@@ -75,10 +75,6 @@ pub fn default_settings() -> AppSettings {
         ocr_api_key: String::new(),
         request_timeout_seconds: 30,
         image_max_kb: 100,
-        browser_kind: "chrome".to_string(),
-        browser_user_data_dir: String::new(),
-        browser_profile: "auto".to_string(),
-        browser_safe_storage_service: "Chrome Safe Storage".to_string(),
         theme_mode: "light".to_string(),
     }
 }

@@ -16,6 +16,14 @@ pub struct SuccessRecord {
     pub row_data: BTreeMap<String, Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CookieEntry {
+    pub name: String,
+    pub value: String,
+    pub domain: String,
+    pub path: String,
+}
+
 pub struct AppStateStore {
     path: PathBuf,
 }
@@ -164,6 +172,46 @@ impl AppStateStore {
         Ok(serde_json::from_str(&data_json).ok())
     }
 
+    pub fn save_cookies(&self, cookies: &[CookieEntry]) -> Result<()> {
+        let mut connection = self.connect()?;
+        let tx = connection.transaction()?;
+        let now = timestamp();
+        for cookie in cookies {
+            tx.execute(
+                "INSERT INTO hollysys_cookies(name, domain, path, value, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(name, domain, path) DO UPDATE SET
+                   value = excluded.value,
+                   updated_at = excluded.updated_at",
+                params![cookie.name, cookie.domain, cookie.path, cookie.value, now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn load_cookies(&self) -> Result<Vec<CookieEntry>> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT name, value, domain, path FROM hollysys_cookies ORDER BY name ASC",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(CookieEntry {
+                name: row.get(0)?,
+                value: row.get(1)?,
+                domain: row.get(2)?,
+                path: row.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn clear_cookies(&self) -> Result<()> {
+        let connection = self.connect()?;
+        connection.execute("DELETE FROM hollysys_cookies", [])?;
+        Ok(())
+    }
+
     pub fn save_pdf_recognition_cache(
         &self,
         file_path: &Path,
@@ -227,6 +275,14 @@ impl AppStateStore {
               fingerprint TEXT NOT NULL,
               data_json TEXT NOT NULL,
               updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS hollysys_cookies (
+              name TEXT NOT NULL,
+              domain TEXT NOT NULL,
+              path TEXT NOT NULL,
+              value TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY (name, domain, path)
             );
             ",
         )?;

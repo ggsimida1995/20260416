@@ -16,18 +16,6 @@ fn default_image_max_kb() -> i64 {
     100
 }
 
-fn default_browser_kind() -> String {
-    "chrome".to_string()
-}
-
-fn default_browser_profile() -> String {
-    "auto".to_string()
-}
-
-fn default_browser_safe_storage_service() -> String {
-    "Chrome Safe Storage".to_string()
-}
-
 fn default_theme_mode() -> String {
     "light".to_string()
 }
@@ -52,17 +40,6 @@ pub struct AppSettings {
     pub request_timeout_seconds: i64,
     #[serde(default = "default_image_max_kb", rename = "imageMaxKb")]
     pub image_max_kb: i64,
-    #[serde(default = "default_browser_kind", rename = "browserKind")]
-    pub browser_kind: String,
-    #[serde(default, rename = "browserUserDataDir")]
-    pub browser_user_data_dir: String,
-    #[serde(default = "default_browser_profile", rename = "browserProfile")]
-    pub browser_profile: String,
-    #[serde(
-        default = "default_browser_safe_storage_service",
-        rename = "browserSafeStorageService"
-    )]
-    pub browser_safe_storage_service: String,
     #[serde(default = "default_theme_mode", rename = "themeMode")]
     pub theme_mode: String,
 }

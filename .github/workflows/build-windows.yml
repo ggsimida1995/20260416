@@ -63,3 +63,18 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target }}
+
+      - name: Upload portable executable
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $src = "src-tauri/target/${{ matrix.target }}/release/project-file-compare.exe"
+          if (-not (Test-Path $src)) {
+            Write-Error "Portable exe not found at $src"
+            exit 1
+          }
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $dst = "ProjectFileCompare_${version}_${{ matrix.arch }}-portable.exe"
+          Copy-Item $src $dst
+          gh release upload "${{ github.ref_name }}" $dst --clobber

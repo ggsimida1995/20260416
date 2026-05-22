@@ -63,16 +63,6 @@ pub async fn choose_file_root(app: AppHandle) -> Result<Option<String>, String> 
 }
 
 #[tauri::command]
-pub async fn choose_browser_user_data_dir(app: AppHandle) -> Result<Option<String>, String> {
-    let selected = app
-        .dialog()
-        .file()
-        .blocking_pick_folder()
-        .map(|path| path.to_string());
-    Ok(selected)
-}
-
-#[tauri::command]
 pub async fn check_session() -> Result<SessionStatus, String> {
     let settings = load_settings().map_err(to_string)?;
     let status = tauri::async_runtime::spawn_blocking(move || check_session_status(&settings))
@@ -118,13 +108,6 @@ fn normalize_settings(mut settings: AppSettings) -> AppSettings {
     if settings.last_file_root.is_empty() {
         settings.last_file_root = default_settings().last_file_root;
     }
-    settings.browser_kind = normalize_browser_kind(&settings.browser_kind);
-    settings.browser_user_data_dir = settings.browser_user_data_dir.trim().to_string();
-    settings.browser_profile = normalize_browser_profile(&settings.browser_profile);
-    settings.browser_safe_storage_service = normalize_browser_safe_storage_service(
-        &settings.browser_kind,
-        &settings.browser_safe_storage_service,
-    );
     settings.theme_mode = normalize_theme_mode(&settings.theme_mode);
     if settings.request_timeout_seconds < 1 {
         settings.request_timeout_seconds = 30;
@@ -135,43 +118,12 @@ fn normalize_settings(mut settings: AppSettings) -> AppSettings {
     settings
 }
 
-fn normalize_browser_kind(value: &str) -> String {
-    match value.trim().to_lowercase().as_str() {
-        "edge" | "microsoft_edge" | "microsoft-edge" => "edge".to_string(),
-        "chromium" => "chromium".to_string(),
-        "custom" | "custom_chromium" | "custom-chromium" => "custom".to_string(),
-        _ => "chrome".to_string(),
-    }
-}
-
 fn normalize_theme_mode(value: &str) -> String {
     match value.trim().to_lowercase().as_str() {
         "system" | "auto" | "跟随系统" => "system".to_string(),
         "dark" | "night" | "夜间" => "dark".to_string(),
         _ => "light".to_string(),
     }
-}
-
-fn normalize_browser_profile(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        "auto".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-fn normalize_browser_safe_storage_service(kind: &str, value: &str) -> String {
-    let trimmed = value.trim();
-    if !trimmed.is_empty() {
-        return trimmed.to_string();
-    }
-    match kind {
-        "edge" => "Microsoft Edge Safe Storage",
-        "chromium" | "custom" => "Chromium Safe Storage",
-        _ => "Chrome Safe Storage",
-    }
-    .to_string()
 }
 
 fn normalize_file_root_path(value: &str) -> String {

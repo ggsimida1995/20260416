@@ -6,6 +6,7 @@
 __pycache__/
 *.pyc
 *.pyo
+/app.py
 build/
 dist/
 node_modules/
