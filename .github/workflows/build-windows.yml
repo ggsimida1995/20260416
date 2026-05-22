@@ -1,26 +1,22 @@
-name: Build Windows Package
+name: Release
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
+    tags:
+      - "v*"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
-    name: Build Windows ${{ matrix.arch }}
+    name: Build ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: x86
-            runner: windows-latest
-            target: i686-pc-windows-msvc
           - arch: x64
             runner: windows-latest
             target: x86_64-pc-windows-msvc
@@ -30,10 +26,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: npm
@@ -44,18 +40,26 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
       - name: Install Frontend Dependencies
         working-directory: web
         run: npm ci
 
-      - name: Build Tauri App
-        working-directory: web
-        run: npm run tauri:build -- --target ${{ matrix.target }} --no-bundle
-
-      - name: Upload Executable
-        uses: actions/upload-artifact@v7
+      - name: Build & Release with tauri-action
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          name: project-file-compare-windows-${{ matrix.arch }}
-          path: |
-            src-tauri/target/${{ matrix.target }}/release/project-file-compare.exe
-          if-no-files-found: error
+          projectPath: .
+          tagName: ${{ github.ref_name }}
+          releaseName: "项目资料比对助手 ${{ github.ref_name }}"
+          releaseBody: "本次更新内容详见提交记录。"
+          releaseDraft: false
+          prerelease: false
+          args: --target ${{ matrix.target }}

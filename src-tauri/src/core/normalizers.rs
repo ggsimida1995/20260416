@@ -169,3 +169,97 @@ fn normalize_pinyin_syllable(value: &str) -> String {
     }
     syllable
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+    use serde_json::json;
+
+    #[test]
+    fn normalize_text_collapses_whitespace() {
+        assert_eq!(normalize_text("  hello   world\n\t"), "hello world");
+        assert_eq!(normalize_text("中文 \u{3000}空格"), "中文 空格");
+        assert_eq!(normalize_text(""), "");
+    }
+
+    #[test]
+    fn normalize_text_value_handles_variants() {
+        assert_eq!(normalize_text_value(None), "");
+        assert_eq!(normalize_text_value(Some(&json!("  abc  "))), "abc");
+        assert_eq!(normalize_text_value(Some(&json!(42))), "42");
+        assert_eq!(normalize_text_value(Some(&json!(true))), "true");
+        assert_eq!(normalize_text_value(Some(&Value::Null)), "");
+    }
+
+    #[test]
+    fn normalize_phone_keeps_only_ascii_digits() {
+        assert_eq!(normalize_phone("(010) 6677-8899"), "01066778899");
+        assert_eq!(normalize_phone("１３８-1234-5678"), "12345678");
+        assert_eq!(normalize_phone(""), "");
+    }
+
+    #[test]
+    fn normalize_project_code_uppercases_and_strips_whitespace() {
+        assert_eq!(normalize_project_code("  bhe-25080117-01 "), "BHE-25080117-01");
+        assert_eq!(normalize_project_code("lhe 25090002 b1"), "LHE25090002B1");
+    }
+
+    #[test]
+    fn normalize_compact_text_drops_whitespace_only() {
+        assert_eq!(normalize_compact_text("张 三"), "张三");
+        assert_eq!(normalize_compact_text(" 张 三 "), "张三");
+        assert_eq!(normalize_compact_text("a b c"), "abc");
+    }
+
+    #[test]
+    fn normalize_date_parses_common_formats() {
+        let expected = NaiveDate::from_ymd_opt(2026, 3, 18).unwrap();
+        assert_eq!(normalize_date("2026-03-18"), Some(expected));
+        assert_eq!(normalize_date("2026/3/18"), Some(expected));
+        assert_eq!(normalize_date("2026.03.18"), Some(expected));
+        assert_eq!(normalize_date("2026年3月18日"), Some(expected));
+        assert_eq!(normalize_date(" 2026 年 03 月 18 日 "), Some(expected));
+        assert_eq!(normalize_date("20260318"), Some(expected));
+    }
+
+    #[test]
+    fn normalize_date_rejects_garbage() {
+        assert_eq!(normalize_date(""), None);
+        assert_eq!(normalize_date("not a date"), None);
+        assert_eq!(normalize_date("2026-13-40"), None);
+    }
+
+    #[test]
+    fn normalize_date_value_handles_optional() {
+        let expected = NaiveDate::from_ymd_opt(2026, 3, 18).unwrap();
+        assert_eq!(normalize_date_value(Some(&json!("2026-3-18"))), Some(expected));
+        assert_eq!(normalize_date_value(None), None);
+        assert_eq!(normalize_date_value(Some(&Value::Null)), None);
+    }
+
+    #[test]
+    fn normalize_amount_handles_strings_and_numbers() {
+        assert_eq!(normalize_amount(Some(&json!(123.45))), Some(123.45));
+        assert_eq!(normalize_amount(Some(&json!("1,234.5"))), Some(1234.5));
+        assert_eq!(normalize_amount(Some(&json!("100万元"))), Some(100.0));
+        assert_eq!(normalize_amount(Some(&json!("不是数字"))), None);
+        assert_eq!(normalize_amount(None), None);
+    }
+
+    #[test]
+    fn names_match_by_loose_pinyin_handles_homophones() {
+        // identical
+        assert!(names_match_by_loose_pinyin("张三", "张三"));
+        // whitespace tolerance
+        assert!(names_match_by_loose_pinyin(" 张 三 ", "张三"));
+        // empty -> false
+        assert!(!names_match_by_loose_pinyin("", "张三"));
+        // different chars but matching loose pinyin: 王(wang) vs 汪(wang) both fold to "wan"
+        assert!(names_match_by_loose_pinyin("王明", "汪明"));
+        // unmistakably different
+        assert!(!names_match_by_loose_pinyin("张三", "李四"));
+        // no chinese -> only exact-string path
+        assert!(!names_match_by_loose_pinyin("zhang san", "zhangsan"));
+    }
+}

@@ -21,8 +21,8 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::thread;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc};
 
 const MAX_COMPARE_WORKERS: usize = 4;
 
@@ -153,85 +153,68 @@ where
     }
 
     let worker_count = worker_count.max(1).min(projects.len());
-    let mut results = Vec::with_capacity(projects.len());
-    let mut abort_reason = None;
 
-    thread::scope(|scope| -> Result<()> {
-        let mut worker_txs = Vec::new();
-        let (result_tx, result_rx) = mpsc::channel::<(usize, Result<ProjectCompareResult>)>();
+    // Shared, read-only inputs: use Arc to avoid per-job clone() of AppSettings and paths.
+    let settings = Arc::new(settings.clone());
+    let state_db_path: Arc<Path> = Arc::from(state_db_path.to_path_buf().into_boxed_path());
+    let workspace_root: Arc<Path> = Arc::from(workspace_root.to_path_buf().into_boxed_path());
+    let projects: Arc<[PathBuf]> = Arc::from(projects.to_vec().into_boxed_slice());
 
-        for worker_id in 0..worker_count {
-            let (worker_tx, worker_rx) = mpsc::channel::<(usize, PathBuf)>();
-            worker_txs.push(worker_tx);
-            let result_tx = result_tx.clone();
-            let settings = settings.clone();
-            let state_db_path = state_db_path.to_path_buf();
-            let workspace_root = workspace_root.to_path_buf();
-            scope.spawn(move || {
-                for (order, project_dir) in worker_rx {
-                    let result = compare_one_project(
-                        &settings,
-                        &state_db_path,
-                        &workspace_root,
-                        order,
-                        project_dir,
-                    );
-                    if result_tx.send((worker_id, result)).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-        drop(result_tx);
+    let next_index = Arc::new(AtomicUsize::new(0));
+    let abort = Arc::new(AtomicBool::new(false));
 
-        let mut next_index = 0usize;
-        let mut active = 0usize;
-        for worker_id in 0..worker_count {
-            if next_index >= projects.len() {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(worker_count)
+        .thread_name(|i| format!("compare-worker-{i}"))
+        .build()
+        .map_err(|err| anyhow::anyhow!("failed to build rayon pool: {err}"))?;
+
+    let (result_tx, result_rx) = mpsc::channel::<Result<ProjectCompareResult>>();
+
+    for _ in 0..worker_count {
+        let projects = Arc::clone(&projects);
+        let settings = Arc::clone(&settings);
+        let state_db_path = Arc::clone(&state_db_path);
+        let workspace_root = Arc::clone(&workspace_root);
+        let next_index = Arc::clone(&next_index);
+        let abort = Arc::clone(&abort);
+        let result_tx = result_tx.clone();
+        pool.spawn(move || loop {
+            if abort.load(Ordering::Relaxed) {
                 break;
             }
-            if send_compare_job(
-                &worker_txs,
-                worker_id,
-                next_index,
-                projects[next_index].clone(),
-            )
-            .is_ok()
-            {
-                next_index += 1;
-                active += 1;
+            let index = next_index.fetch_add(1, Ordering::Relaxed);
+            if index >= projects.len() {
+                break;
             }
-        }
+            let project_dir = projects[index].clone();
+            let outcome = compare_one_project(
+                &settings,
+                &state_db_path,
+                &workspace_root,
+                index,
+                project_dir,
+            );
+            if result_tx.send(outcome).is_err() {
+                break;
+            }
+        });
+    }
+    drop(result_tx);
 
-        while active > 0 {
-            let (worker_id, result) = result_rx.recv()?;
-            active -= 1;
-            let result = result?;
-            if let Some(reason) = result.abort_reason.clone() {
-                abort_reason.get_or_insert(reason);
-            }
-            results.push(result);
-            let done = results.len();
-            if let Some(latest) = results.last() {
-                progress(done, latest);
-            }
-            if abort_reason.is_none() && next_index < projects.len() {
-                if send_compare_job(
-                    &worker_txs,
-                    worker_id,
-                    next_index,
-                    projects[next_index].clone(),
-                )
-                .is_ok()
-                {
-                    next_index += 1;
-                    active += 1;
-                }
-            }
+    let mut results = Vec::with_capacity(projects.len());
+    let mut abort_reason: Option<String> = None;
+    while let Ok(item) = result_rx.recv() {
+        let result = item?;
+        if let Some(reason) = result.abort_reason.clone() {
+            abort_reason.get_or_insert(reason);
+            abort.store(true, Ordering::Relaxed);
         }
-        drop(worker_txs);
-        Ok(())
-    })?;
+        results.push(result);
+        if let Some(latest) = results.last() {
+            progress(results.len(), latest);
+        }
+    }
 
     results.sort_by_key(|item| item.order);
     if let Some(reason) = abort_reason {
@@ -242,15 +225,6 @@ where
 
 fn compare_worker_count(total: usize) -> usize {
     total.clamp(1, MAX_COMPARE_WORKERS)
-}
-
-fn send_compare_job(
-    worker_txs: &[mpsc::Sender<(usize, PathBuf)>],
-    worker_id: usize,
-    index: usize,
-    project_dir: PathBuf,
-) -> std::result::Result<(), mpsc::SendError<(usize, PathBuf)>> {
-    worker_txs[worker_id].send((index, project_dir))
 }
 
 fn compare_one_project(

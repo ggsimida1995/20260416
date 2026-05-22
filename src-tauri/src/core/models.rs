@@ -4,6 +4,10 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+fn default_ai_enabled() -> bool {
+    true
+}
+
 fn default_timeout() -> i64 {
     30
 }
@@ -32,7 +36,7 @@ fn default_theme_mode() -> String {
 pub struct AppSettings {
     #[serde(default, rename = "lastFileRoot")]
     pub last_file_root: String,
-    #[serde(default, rename = "aiEnabled")]
+    #[serde(default = "default_ai_enabled", rename = "aiEnabled")]
     pub ai_enabled: bool,
     #[serde(default, rename = "aiBaseUrl")]
     pub ai_base_url: String,

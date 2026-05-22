@@ -1,13 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { check as checkUpdate } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
 import {
   Button,
   Card,
+  Divider,
   Empty,
   Form,
   Input,
   InputNumber,
+  Layout,
   Message,
   Modal,
   Progress,
@@ -15,7 +19,12 @@ import {
   Space,
   Switch,
   Tabs,
-  Tag
+  Tag,
+  Alert,
+  Descriptions,
+  Statistic,
+  Radio,
+  Collapse
 } from '@arco-design/web-react';
 import {
   IconCheckCircle,
@@ -25,7 +34,11 @@ import {
   IconFolder,
   IconRefresh,
   IconSettings,
-  IconSync
+  IconSync,
+  IconInfoCircle,
+  IconFile,
+  IconLeft,
+  IconRight
 } from '@arco-design/web-react/icon';
 
 declare global {
@@ -126,7 +139,7 @@ const TabPane = Tabs.TabPane;
 
 const emptySettings: Settings = {
   lastFileRoot: '',
-  aiEnabled: false,
+  aiEnabled: true,
   aiBaseUrl: '',
   aiApiKey: '',
   aiModel: '',
@@ -201,8 +214,10 @@ export default function App() {
   const [logs, setLogs] = useState<string[]>([]);
   const [busy, setBusy] = useState<BusyState>({ active: false, text: '' });
   const [settingsVisible, setSettingsVisible] = useState(false);
+  const [siderCollapsed, setSiderCollapsed] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<Settings>(emptySettings);
   const [progress, setProgress] = useState<WorkflowProgress | null>(null);
+  const [logFilter, setLogFilter] = useState<'all' | 'success' | 'failed' | 'system'>('all');
   const logEndRef = useRef<HTMLDivElement | null>(null);
 
   const settings = state?.settings ?? emptySettings;
@@ -246,14 +261,52 @@ export default function App() {
     return applyTheme(settings.themeMode);
   }, [settings.themeMode]);
 
-  const renderedLogs = useMemo(() => logs.filter(shouldShowRuntimeLog).map((line) => ({
-    line,
-    projectLog: parseCompareLogLine(line)
-  })), [logs]);
+  // 解析出所有的比对日志，提供统一过滤器
+  const allParsedLogs = useMemo(() => {
+    return logs.filter(shouldShowRuntimeLog).map((line) => {
+      const projectLog = parseCompareLogLine(line);
+      return {
+        line,
+        projectLog
+      };
+    });
+  }, [logs]);
+
+  // 统计不同状态下的日志量，用于显示在 Radio.Button 上
+  const statsCounts = useMemo(() => {
+    let success = 0;
+    let failed = 0;
+    let system = 0;
+    allParsedLogs.forEach(item => {
+      if (item.projectLog) {
+        if (item.projectLog.passed) {
+          success++;
+        } else {
+          failed++;
+        }
+      } else {
+        system++;
+      }
+    });
+    return {
+      all: allParsedLogs.length,
+      success,
+      failed,
+      system
+    };
+  }, [allParsedLogs]);
+
+  // 根据当前过滤器筛选出的日志
+  const filteredLogs = useMemo(() => {
+    if (logFilter === 'all') return allParsedLogs;
+    if (logFilter === 'success') return allParsedLogs.filter(item => item.projectLog?.passed === true);
+    if (logFilter === 'failed') return allParsedLogs.filter(item => item.projectLog && item.projectLog.passed === false);
+    return allParsedLogs.filter(item => !item.projectLog);
+  }, [allParsedLogs, logFilter]);
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ block: 'nearest' });
-  }, [logs.length]);
+  }, [filteredLogs.length]);
 
   async function bootstrap(): Promise<void> {
     if (!isTauriRuntime()) {
@@ -369,7 +422,7 @@ export default function App() {
     options: ActionOptions = {}
   ): Promise<void> {
     await runPlainAction(runningText, successText, async () => {
-      sync(await action());
+      sync(await call<AppState>('action'));
     }, options);
   }
 
@@ -455,19 +508,89 @@ export default function App() {
   }
 
   async function runCompare(): Promise<void> {
-    await runStateAction('比对中', '比对完成', () => call<AppState>('run_compare_only', { fileRoot: currentFileRoot() }), { showProgress: true, resetLogs: true });
+    await runPlainAction('比对中', '比对完成', async () => {
+      sync(await call<AppState>('run_compare_only', { fileRoot: currentFileRoot() }));
+    }, { showProgress: true, resetLogs: true });
   }
 
   async function runBatch(): Promise<void> {
-    await runStateAction('批处理中', '批处理完成', () => call<AppState>('run_batch', { fileRoot: currentFileRoot() }), { showProgress: true, resetLogs: true });
+    await runPlainAction('批处理中', '批处理完成', async () => {
+      sync(await call<AppState>('run_batch', { fileRoot: currentFileRoot() }));
+    }, { showProgress: true, resetLogs: true });
   }
 
   async function runDownload(): Promise<void> {
-    await runStateAction('下载中', '下载完成', () => call<AppState>('run_download_only', { fileRoot: currentFileRoot() }), { showProgress: true, resetLogs: true });
+    await runPlainAction('下载中', '下载完成', async () => {
+      sync(await call<AppState>('run_download_only', { fileRoot: currentFileRoot() }));
+    }, { showProgress: true, resetLogs: true });
   }
 
   async function openDownloadedDir(): Promise<void> {
     await runPlainAction('打开中', '目录已打开', () => call<boolean>('open_path', { path: currentDownloadRoot() }), { log: false });
+  }
+
+  async function checkForUpdate(): Promise<void> {
+    try {
+      Message.loading({ id: 'updater', content: '正在检查更新…' });
+      const update = await checkUpdate();
+      if (!update) {
+        Message.success({ id: 'updater', content: '当前已是最新版本' });
+        return;
+      }
+      Message.clear();
+      Modal.confirm({
+        title: '发现新版本',
+        content: (
+          <div>
+            <div style={{ marginBottom: 8 }}>
+              新版本：<b>v{update.version}</b>（当前 v{update.currentVersion}）
+            </div>
+            {update.body && (
+              <pre style={{
+                maxHeight: 240,
+                overflow: 'auto',
+                background: 'var(--color-fill-2)',
+                padding: 8,
+                borderRadius: 4,
+                fontSize: 12,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word'
+              }}>{update.body}</pre>
+            )}
+            <div style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
+              点击「立即更新」后将自动下载并重启应用。
+            </div>
+          </div>
+        ),
+        okText: '立即更新',
+        cancelText: '稍后',
+        onOk: async () => {
+          try {
+            let downloaded = 0;
+            let contentLength = 0;
+            await update.downloadAndInstall((event) => {
+              if (event.event === 'Started') {
+                contentLength = event.data.contentLength ?? 0;
+                Message.loading({ id: 'updater', content: '开始下载更新…', duration: 0 });
+              } else if (event.event === 'Progress') {
+                downloaded += event.data.chunkLength;
+                const percent = contentLength > 0
+                  ? Math.floor((downloaded / contentLength) * 100)
+                  : 0;
+                Message.loading({ id: 'updater', content: `下载更新中 ${percent}%`, duration: 0 });
+              } else if (event.event === 'Finished') {
+                Message.success({ id: 'updater', content: '下载完成，即将重启…' });
+              }
+            });
+            await relaunch();
+          } catch (error) {
+            Message.error({ id: 'updater', content: `更新失败：${(error as Error).message || error}` });
+          }
+        }
+      });
+    } catch (error) {
+      Message.error({ id: 'updater', content: `检查更新失败：${(error as Error).message || error}` });
+    }
   }
 
   async function clearRuntimeLogs(): Promise<void> {
@@ -495,101 +618,317 @@ export default function App() {
     }, { log: false });
   }
 
-  const identity = isSessionReady ? (session.displayName || session.account) : '';
-  const sessionTitle = identity ? `${identity}，欢迎您使用` : sessionFallbackTitle(session.state);
-  const profile = session.profile && session.profile !== 'auto' ? ` | ${session.profile}` : '';
-  const sessionDetail = [session.browserName ? `${session.browserName}${profile}` : '浏览器', session.checkedAt].filter(Boolean).join(' | ');
-  const sessionClass = `session-button ${sessionTone(session.state)}`;
+  const isDirSelected = Boolean(currentFileRoot());
 
   return (
-    <div className={`app-shell ${progress ? 'has-progress' : 'no-progress'}`}>
-      <Card className="topbar-card" bordered bodyStyle={{ padding: 5 }}>
-        <button className={sessionClass} type="button" disabled={isBusy} onClick={() => void refreshSession()}>
-          <span className="session-lines">
-            <span className={identity ? 'session-main known' : 'session-main pending'}>{sessionTitle}</span>
-            <span className="session-detail">{sessionDetail || '未读取浏览器 Cookie'}</span>
-          </span>
-          <IconRefresh className="session-refresh-icon" />
-        </button>
-        <Space size={8} wrap className="toolbar">
-          <Button type="primary" icon={<IconSync />} disabled={isBusy || !isSessionReady} loading={busy.text === '批处理中'} onClick={() => void runBatch()}>
-            开始批处理
-          </Button>
-          <Button icon={<IconDownload />} disabled={isBusy || !isSessionReady} loading={busy.text === '下载中'} onClick={() => void runDownload()}>
-            仅下载资料
-          </Button>
-          <Button type="primary" icon={<IconCheckCircle />} disabled={isBusy} loading={busy.text === '比对中'} onClick={() => void runCompare()}>
-            仅本地比对
-          </Button>
-          <Button icon={<IconSettings />} disabled={isBusy} onClick={openSettings}>
-            设置
-          </Button>
-        </Space>
-      </Card>
-
-      {progress && (
-        <Card className="progress-card" bordered bodyStyle={{ padding: 10 }}>
-          <div className="progress-head">
-            <div className="progress-title">
-              <span>{progress.stage || busy.text || '处理中'}</span>
-              <Tag color={progress.status === 'error' ? 'red' : progress.status === 'done' ? 'green' : 'arcoblue'}>
-                {progress.total > 0 ? `${progress.current}/${progress.total}` : '处理中'}
-              </Tag>
-            </div>
-            <span className="progress-message">{progress.message}</span>
-          </div>
-          <Progress
-            percent={progress.percent}
-            status={progress.status === 'error' ? 'error' : progress.status === 'done' ? 'success' : 'normal'}
-            size="small"
-            strokeWidth={10}
-            animation={progress.status === 'running'}
+    <Layout className="app-shell">
+      <Layout className="main-layout" hasSider>
+        <Layout.Sider
+          className="console-deck"
+          width={300}
+          collapsedWidth={0}
+          breakpoint="lg"
+          collapsed={siderCollapsed}
+          onCollapse={(collapsed) => setSiderCollapsed(collapsed)}
+          trigger={null}
+        >
+          <Button
+            className="sider-toggle"
+            size="mini"
+            type="primary"
+            icon={siderCollapsed ? <IconRight /> : <IconLeft />}
+            onClick={() => setSiderCollapsed((value) => !value)}
+            aria-label={siderCollapsed ? '展开侧栏' : '收起侧栏'}
           />
-        </Card>
-      )}
 
-      <Card
-        className="log-card"
-        bordered
-        title={<span className="card-title">运行日志</span>}
-        extra={(
-          <Space size={8} wrap>
-            <Button size="mini" type="outline" icon={<IconFolder />} disabled={isBusy} onClick={() => void openDownloadedDir()}>
-              打开目录
-            </Button>
-            <Button size="mini" status="success" icon={<IconExport />} disabled={isBusy || outputs.pendingSuccessCount === 0} onClick={() => void exportSuccess()}>
-              导出结果
-            </Button>
-            <Button size="mini" status="warning" icon={<IconExport />} disabled={isBusy || outputs.failedCount === 0} onClick={() => void exportError()}>
-              导出异常
-            </Button>
-            <Button size="mini" status="danger" icon={<IconDelete />} disabled={isBusy || !logs.length} onClick={() => void clearRuntimeLogs()}>
-              清空日志
-            </Button>
-          </Space>
-        )}
-      >
-        <div className={`log-body ${renderedLogs.length ? '' : 'empty'}`}>
-          {renderedLogs.length ? (
-            <div className="runtime-log-list">
-              {renderedLogs.map((item, index) => item.projectLog ? (
-                <CompareLogTable log={item.projectLog} key={`${item.projectLog.finishedAt}-${item.projectLog.projectCode}-${index}`} />
-              ) : (
-                <pre className="plain-log-text" key={`${item.line}-${index}`}>{item.line}</pre>
-              ))}
-            </div>
-          ) : (
-            <div className="log-empty">
-              <Empty description="暂无运行日志" />
-            </div>
-          )}
-          <div ref={logEndRef} />
-        </div>
-      </Card>
+          {/* 整块控制台卡片 */}
+          <Card className="console-card" bordered={false}>
 
+            {/* 区段 1：会话状态 */}
+            <div className="console-section">
+              <div className="console-section-head">
+                <span className="console-section-title">会话状态</span>
+                <Button
+                  size="mini"
+                  type="text"
+                  icon={<IconRefresh />}
+                  loading={session.state === 'checking'}
+                  onClick={() => void refreshSession()}
+                >
+                  刷新
+                </Button>
+              </div>
+              <Alert
+                type={session.state === 'ok' ? 'success' : (session.state === 'checking' ? 'info' : 'warning')}
+                showIcon
+                title={session.state === 'ok' ? '和利时系统联通正常' : (session.state === 'checking' ? '检测中...' : '会话失效/未登录')}
+                content={session.state === 'ok' ? `${session.displayName || session.account}已成功同步` : session.message || '请确保目标浏览器已正常登录OA系统'}
+              />
+              {isSessionReady && (
+                <Descriptions
+                  border
+                  size="mini"
+                  column={1}
+                  layout="horizontal"
+                  style={{ marginTop: 8 }}
+                  data={[
+                    { label: '系统账号', value: session.account || '-' },
+                    { label: '中文姓名', value: session.displayName || '-' },
+                    { label: '会话来源', value: session.browserName || '-' },
+                    ...(session.checkedAt ? [{ label: '检测时间', value: session.checkedAt }] : [])
+                  ]}
+                />
+              )}
+            </div>
+
+            <Divider style={{ margin: '12px 0' }} />
+
+            {/* 区段 2：项目工作目录 */}
+            <div className="console-section">
+              <div className="console-section-head">
+                <span className="console-section-title">项目工作目录</span>
+              </div>
+              <div className="dir-path-text">
+                {currentFileRoot() || '⚠️ 尚未选择工作路径，程序无法启动'}
+              </div>
+              <Space style={{ width: '100%', justifyContent: 'space-between', marginTop: 8 }}>
+                <Button type="primary" size="small" onClick={openSettings}>
+                  配置路径
+                </Button>
+                <Button
+                  type="secondary"
+                  size="small"
+                  icon={<IconFolder />}
+                  disabled={!isDirSelected}
+                  onClick={() => void openDownloadedDir()}
+                >
+                  打开目录
+                </Button>
+              </Space>
+              <Button
+                long
+                size="small"
+                type="text"
+                icon={<IconSync />}
+                onClick={() => void checkForUpdate()}
+                style={{ marginTop: 4 }}
+              >
+                检查更新
+              </Button>
+            </div>
+
+            <Divider style={{ margin: '12px 0' }} />
+
+            {/* 区段 3：成果统计与导出 */}
+            <div className="console-section">
+              <div className="console-section-head">
+                <span className="console-section-title">成果统计与数据导出</span>
+              </div>
+              <div className="stats-grid">
+                <div className="stat-row">
+                  <Statistic title="待导出成功项" value={outputs.pendingSuccessCount} precision={0} suffix="项" groupSeparator />
+                  <Button
+                    size="mini"
+                    status="success"
+                    type="primary"
+                    icon={<IconExport />}
+                    disabled={isBusy || outputs.pendingSuccessCount === 0}
+                    onClick={() => void exportSuccess()}
+                  >
+                    导出台账
+                  </Button>
+                </div>
+                <div className="stat-row">
+                  <Statistic title="比对异常数" value={outputs.failedCount} precision={0} suffix="个" groupSeparator />
+                  <Button
+                    size="mini"
+                    status="danger"
+                    type="outline"
+                    icon={<IconExport />}
+                    disabled={isBusy || outputs.failedCount === 0}
+                    onClick={() => void exportError()}
+                  >
+                    导出异常
+                  </Button>
+                </div>
+                <div className="stat-row">
+                  <Statistic title="已处理项目数" value={outputs.projectCount} precision={0} suffix="个" groupSeparator />
+                  <IconInfoCircle style={{ color: 'var(--color-text-3)', fontSize: 16 }} />
+                </div>
+              </div>
+            </div>
+
+          </Card>
+
+        </Layout.Sider>
+
+        {/* 右侧主工作区 */}
+        <Layout.Content className={`workspace-deck ${progress ? 'has-progress' : 'no-progress'}`}>
+
+          {/* 整块工作区卡片 */}
+          <Card className="workspace-card" bordered={false}>
+
+            {/* 区段 1：操作区 */}
+            {!isDirSelected ? (
+              <div className="action-content">
+                <div className="action-head">
+                  <span />
+                  <Button
+                    icon={<IconSettings />}
+                    type="text"
+                    size="small"
+                    disabled={isBusy}
+                    title="全局设置"
+                    onClick={openSettings}
+                  />
+                </div>
+                <div className="empty-guide">
+                  <Empty description={
+                    <div>
+                      <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--color-text-1)', marginBottom: 8 }}>
+                        请先完成工作目录配置
+                      </div>
+                      <div style={{ color: 'var(--color-text-3)', fontSize: 12 }}>
+                        请在左侧点击“配置路径”指定保存项目关闭资料的数据根目录。
+                      </div>
+                    </div>
+                  } />
+                </div>
+              </div>
+            ) : (
+              <div className="action-content">
+                <div className="action-head">
+                  <div className="action-hint">
+                    <IconInfoCircle />
+                    <span>批处理将循环拉取未下载的项目，并在下载完成后立即启动数据内容校验</span>
+                  </div>
+                  <Button
+                    icon={<IconSettings />}
+                    type="text"
+                    size="small"
+                    disabled={isBusy}
+                    title="全局设置"
+                    onClick={openSettings}
+                  />
+                </div>
+                <Space size="medium" wrap>
+                  <Button
+                    type="primary"
+                    icon={<IconSync />}
+                    disabled={isBusy || !isSessionReady}
+                    loading={busy.text === '批处理中'}
+                    onClick={() => void runBatch()}
+                  >
+                    执行批处理
+                  </Button>
+                  <Button
+                    type="outline"
+                    icon={<IconDownload />}
+                    disabled={isBusy || !isSessionReady}
+                    loading={busy.text === '下载中'}
+                    onClick={() => void runDownload()}
+                  >
+                    仅下载附件
+                  </Button>
+                  <Button
+                    type="secondary"
+                    icon={<IconCheckCircle />}
+                    disabled={isBusy}
+                    loading={busy.text === '比对中'}
+                    onClick={() => void runCompare()}
+                  >
+                    仅本地比对
+                  </Button>
+                </Space>
+              </div>
+            )}
+
+            {/* 区段 2：运行时进度 */}
+            {progress && (
+              <>
+                <Divider style={{ margin: '12px 0' }} />
+                <div className="progress-section">
+                  <div className="progress-head">
+                    <div className="progress-title">
+                      <span>{progress.stage || busy.text || '执行中'}</span>
+                      <Tag color={progress.status === 'error' ? 'red' : progress.status === 'done' ? 'green' : 'arcoblue'} style={{ marginLeft: 8 }}>
+                        {progress.total > 0 ? `${progress.current}/${progress.total}` : '处理中'}
+                      </Tag>
+                    </div>
+                    <span className="progress-message">{progress.message}</span>
+                  </div>
+                  <Progress
+                    percent={progress.percent}
+                    status={progress.status === 'error' ? 'error' : progress.status === 'done' ? 'success' : 'normal'}
+                    size="small"
+                    strokeWidth={6}
+                  />
+                </div>
+              </>
+            )}
+
+            <Divider style={{ margin: '12px 0' }} />
+
+            {/* 区段 3：日志与比对详情 */}
+            <div className="log-explorer-section">
+              <div className="console-section-head">
+                <span className="console-section-title">比对详情及运行日志</span>
+                <Button
+                  size="mini"
+                  status="danger"
+                  type="text"
+                  icon={<IconDelete />}
+                  disabled={isBusy || !logs.length}
+                  onClick={() => void clearRuntimeLogs()}
+                >
+                  清空日志
+                </Button>
+              </div>
+
+              {logs.length > 0 && (
+                <div className="log-filter-bar">
+                  <Radio.Group
+                    type="button"
+                    size="small"
+                    value={logFilter}
+                    onChange={(val) => setLogFilter(val as any)}
+                  >
+                    <Radio value="all">全部 ({statsCounts.all})</Radio>
+                    <Radio value="success">比对成功 ({statsCounts.success})</Radio>
+                    <Radio value="failed">比对失败 ({statsCounts.failed})</Radio>
+                    <Radio value="system">系统日志 ({statsCounts.system})</Radio>
+                  </Radio.Group>
+                </div>
+              )}
+
+              <div className="log-body">
+                {filteredLogs.length ? (
+                  <div className="runtime-log-list">
+                    {filteredLogs.map((item, index) => item.projectLog ? (
+                      <CompareLogTable log={item.projectLog} key={`${item.projectLog.finishedAt}-${item.projectLog.projectCode}-${index}`} />
+                    ) : (
+                      <pre className="plain-log-text" key={`${item.line}-${index}`}>{item.line}</pre>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="log-empty">
+                    <Empty description="暂无符合条件的日志或比对报告" />
+                  </div>
+                )}
+                <div ref={logEndRef} />
+              </div>
+            </div>
+
+          </Card>
+
+        </Layout.Content>
+
+      </Layout>
+
+      {/* 设置对话框 */}
       <Modal
         className="settings-modal"
-        title="设置"
+        title="配置中心"
         visible={settingsVisible}
         maskClosable={false}
         style={{ width: 760 }}
@@ -635,107 +974,199 @@ export default function App() {
                     }}
                   />
                 </Form.Item>
-                <Form.Item label="数据目录">
-                  <Input
-                    value={settingsDraft.browserUserDataDir}
-                    placeholder="留空使用默认目录"
-                    onChange={(value) => patchSettings('browserUserDataDir', value)}
-                    addAfter={<Button size="small" type="primary" onClick={() => void chooseBrowserUserDataDir()}>选择</Button>}
-                  />
-                </Form.Item>
-                <Form.Item label="Profile">
-                  <Input
-                    value={settingsDraft.browserProfile}
-                    placeholder="auto / Default / Profile 1"
-                    onChange={(value) => patchSettings('browserProfile', value)}
-                  />
-                </Form.Item>
-                <Form.Item label="钥匙串服务">
-                  <Input
-                    value={settingsDraft.browserSafeStorageService}
-                    placeholder="Chrome Safe Storage"
-                    onChange={(value) => patchSettings('browserSafeStorageService', value)}
-                  />
-                </Form.Item>
+                <Collapse bordered={false} style={{ background: 'transparent' }}>
+                  <Collapse.Item
+                    name="advanced"
+                    header="高级设置（一般无需修改）"
+                  >
+                    <Form.Item label="数据目录">
+                      <Input
+                        value={settingsDraft.browserUserDataDir}
+                        placeholder="留空使用默认目录"
+                        onChange={(value) => patchSettings('browserUserDataDir', value)}
+                        addAfter={<Button size="small" type="primary" onClick={() => void chooseBrowserUserDataDir()}>选择</Button>}
+                      />
+                    </Form.Item>
+                    <Form.Item label="Profile">
+                      <Input
+                        value={settingsDraft.browserProfile}
+                        placeholder="auto / Default / Profile 1"
+                        onChange={(value) => patchSettings('browserProfile', value)}
+                      />
+                    </Form.Item>
+                    <Form.Item label="钥匙串服务">
+                      <Input
+                        value={settingsDraft.browserSafeStorageService}
+                        placeholder="Chrome Safe Storage"
+                        onChange={(value) => patchSettings('browserSafeStorageService', value)}
+                      />
+                    </Form.Item>
+                  </Collapse.Item>
+                </Collapse>
               </Form>
             </div>
           </TabPane>
           <TabPane key="recognition" title="识别设置">
             <div className="settings-pane">
+              <Alert
+                type="info"
+                style={{ marginBottom: 12 }}
+                content="验收报告的手写签名、电话需要通过 AI 接口识别，请填写下方接口信息。"
+              />
               <Form layout="horizontal" labelAlign="left" labelCol={{ span: 5 }} wrapperCol={{ span: 19 }} colon={false}>
-                <Form.Item label="在线识别">
-                  <Switch checked={settingsDraft.aiEnabled} onChange={(checked) => patchSettings('aiEnabled', checked)} checkedText="启用" uncheckedText="停用" />
+                <Form.Item label="接口地址" extra="兼容 OpenAI 接口的服务地址">
+                  <Input
+                    value={settingsDraft.aiBaseUrl}
+                    placeholder="例如 https://api.openai.com/v1"
+                    onChange={(value) => patchSettings('aiBaseUrl', value)}
+                  />
                 </Form.Item>
-                <Form.Item label="AI 接口">
-                  <Input value={settingsDraft.aiBaseUrl} onChange={(value) => patchSettings('aiBaseUrl', value)} />
+                <Form.Item label="接口密钥">
+                  <Input
+                    type="password"
+                    value={settingsDraft.aiApiKey}
+                    placeholder="服务商提供的 API Key"
+                    onChange={(value) => patchSettings('aiApiKey', value)}
+                  />
                 </Form.Item>
-                <Form.Item label="AI Key">
-                  <Input type="password" value={settingsDraft.aiApiKey} onChange={(value) => patchSettings('aiApiKey', value)} />
+                <Form.Item label="模型名称" extra="需支持图片识别的多模态模型">
+                  <Input
+                    value={settingsDraft.aiModel}
+                    placeholder="例如 gpt-4o / qwen-vl-max"
+                    onChange={(value) => patchSettings('aiModel', value)}
+                  />
                 </Form.Item>
-                <Form.Item label="AI 模型">
-                  <Input value={settingsDraft.aiModel} onChange={(value) => patchSettings('aiModel', value)} />
-                </Form.Item>
-                <Form.Item label="OCR 接口">
-                  <Input value={settingsDraft.ocrBaseUrl} onChange={(value) => patchSettings('ocrBaseUrl', value)} />
-                </Form.Item>
-                <Form.Item label="OCR Key">
-                  <Input type="password" value={settingsDraft.ocrApiKey} onChange={(value) => patchSettings('ocrApiKey', value)} />
-                </Form.Item>
-                <Form.Item label="超时(秒)">
-                  <InputNumber min={1} max={300} value={settingsDraft.requestTimeoutSeconds} onChange={(value) => patchSettings('requestTimeoutSeconds', Number(value || 30))} />
-                </Form.Item>
-                <Form.Item label="图片上限(KB)">
-                  <InputNumber min={20} max={1024} value={settingsDraft.imageMaxKb} onChange={(value) => patchSettings('imageMaxKb', Number(value || 100))} />
-                </Form.Item>
+                <Collapse bordered={false} style={{ background: 'transparent' }}>
+                  <Collapse.Item
+                    name="advanced"
+                    header="高级设置（一般无需修改）"
+                  >
+                    <Form.Item label="独立 OCR 地址" extra="留空则使用上方接口地址">
+                      <Input
+                        value={settingsDraft.ocrBaseUrl}
+                        placeholder="若 OCR 走另一家服务再填"
+                        onChange={(value) => patchSettings('ocrBaseUrl', value)}
+                      />
+                    </Form.Item>
+                    <Form.Item label="独立 OCR 密钥">
+                      <Input
+                        type="password"
+                        value={settingsDraft.ocrApiKey}
+                        placeholder="留空则复用上方密钥"
+                        onChange={(value) => patchSettings('ocrApiKey', value)}
+                      />
+                    </Form.Item>
+                    <Form.Item label="请求超时" extra="单位：秒，网络差时可调大">
+                      <InputNumber
+                        min={1}
+                        max={300}
+                        value={settingsDraft.requestTimeoutSeconds}
+                        onChange={(value) => patchSettings('requestTimeoutSeconds', Number(value || 30))}
+                      />
+                    </Form.Item>
+                    <Form.Item label="图片压缩上限" extra="单位：KB，越大越清晰但耗时更长">
+                      <InputNumber
+                        min={20}
+                        max={1024}
+                        value={settingsDraft.imageMaxKb}
+                        onChange={(value) => patchSettings('imageMaxKb', Number(value || 100))}
+                      />
+                    </Form.Item>
+                  </Collapse.Item>
+                </Collapse>
               </Form>
             </div>
           </TabPane>
         </Tabs>
       </Modal>
-    </div>
+    </Layout>
   );
 }
 
+// 严整高亮且克制的比对表格组件
 function CompareLogTable({ log }: { log: ProjectCompareLog }) {
   const statusText = log.passed ? '比对成功' : '比对失败';
+
+  // 1. 提取最后一行的结果行 (fileName === "比对结果")
+  const resultRow = useMemo(() => {
+    return log.rows.find(row => row.fileName === '比对结果');
+  }, [log.rows]);
+
+  // 2. 检测哪些列的值是 "❌"
+  const conflicts = useMemo(() => {
+    return {
+      projectCode: resultRow?.projectCode === '❌',
+      projectName: resultRow?.projectName === '❌',
+      contactName: resultRow?.contactName === '❌',
+      contactPhone: resultRow?.contactPhone === '❌',
+      startTime: resultRow?.startTime === '❌',
+      acceptanceTime: resultRow?.acceptanceTime === '❌',
+      amount: resultRow?.amount === '❌',
+      hasRedStamp: resultRow?.hasRedStamp === '❌'
+    };
+  }, [resultRow]);
+
+  // 3. 决定单元格样式类，仅在冲突列着淡色，绝不炫技
+  const getCellClass = (field: keyof typeof conflicts, isResultRow: boolean, val: string) => {
+    const value = String(val || '').trim();
+    if (isResultRow) {
+      if (value === '❌') return 'conflict-cell';
+      if (value === '✅') return 'valid-cell';
+      return '';
+    }
+    return conflicts[field] ? 'conflict-cell' : '';
+  };
+
   return (
     <section className={`compare-log-item ${log.passed ? 'success' : 'error'}`}>
       <div className="compare-log-head">
         <div className="compare-log-title">
           <span className="compare-log-name">{log.projectCode || log.projectName || '未识别项目'}</span>
-          <Tag color={log.passed ? 'green' : 'red'}>{statusText}</Tag>
+          <Tag color={log.passed ? 'green' : 'red'} style={{ marginLeft: '8px' }}>{statusText}</Tag>
         </div>
         <span className="compare-log-time">{log.finishedAt}</span>
       </div>
+      
+      {/* 比对异常简述 */}
+      {log.summary && (
+        <div className="compare-log-summary">
+          <IconFile />
+          <span>{log.summary}</span>
+        </div>
+      )}
+
       <div className="compare-table-wrap">
         <table className="compare-log-table">
           <thead>
             <tr>
-              <th>文件名称</th>
+              <th>文档来源</th>
               <th>项目编号</th>
               <th>项目全称</th>
               <th>用户姓名</th>
               <th>联系电话</th>
               <th>开始时间</th>
               <th>验收时间</th>
-              <th>金额</th>
+              <th>合同金额</th>
               <th>是否有红章</th>
             </tr>
           </thead>
           <tbody>
-            {log.rows.map((row, index) => (
-              <tr className={row.fileName === '比对结果' ? 'result-row' : ''} key={`${row.fileName}-${index}`}>
-                <td>{valueOrDash(row.fileName)}</td>
-                <td>{valueOrDash(row.projectCode)}</td>
-                <td>{valueOrDash(row.projectName)}</td>
-                <td>{valueOrDash(row.contactName)}</td>
-                <td>{valueOrDash(row.contactPhone)}</td>
-                <td>{valueOrDash(row.startTime)}</td>
-                <td>{valueOrDash(row.acceptanceTime)}</td>
-                <td>{valueOrDash(row.amount || '')}</td>
-                <td>{valueOrDash(row.hasRedStamp || '')}</td>
-              </tr>
-            ))}
+            {log.rows.map((row, index) => {
+              const isResultRow = row.fileName === '比对结果';
+              return (
+                <tr className={isResultRow ? 'result-row' : ''} key={`${row.fileName}-${index}`}>
+                  <td><strong>{valueOrDash(row.fileName)}</strong></td>
+                  <td className={getCellClass('projectCode', isResultRow, row.projectCode)}>{valueOrDash(row.projectCode)}</td>
+                  <td className={getCellClass('projectName', isResultRow, row.projectName)}>{valueOrDash(row.projectName)}</td>
+                  <td className={getCellClass('contactName', isResultRow, row.contactName)}>{valueOrDash(row.contactName)}</td>
+                  <td className={getCellClass('contactPhone', isResultRow, row.contactPhone)}>{valueOrDash(row.contactPhone)}</td>
+                  <td className={getCellClass('startTime', isResultRow, row.startTime)}>{valueOrDash(row.startTime)}</td>
+                  <td className={getCellClass('acceptanceTime', isResultRow, row.acceptanceTime)}>{valueOrDash(row.acceptanceTime)}</td>
+                  <td className={getCellClass('amount', isResultRow, row.amount || '')}>{valueOrDash(row.amount || '')}</td>
+                  <td className={getCellClass('hasRedStamp', isResultRow, row.hasRedStamp || '')}>{valueOrDash(row.hasRedStamp || '')}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -793,7 +1224,7 @@ function shouldShowRuntimeLog(line: string): boolean {
 
 function valueOrDash(value: string): string {
   const normalized = String(value || '').trim();
-  return normalized;
+  return normalized || '-';
 }
 
 function normalizeThemeMode(value: string): string {
@@ -839,18 +1270,4 @@ function defaultSafeStorageService(kind: string): string {
   if (normalized === 'edge') return 'Microsoft Edge Safe Storage';
   if (normalized === 'chromium' || normalized === 'custom') return 'Chromium Safe Storage';
   return 'Chrome Safe Storage';
-}
-
-function sessionTone(stateName: string): string {
-  if (stateName === 'ok') return 'success';
-  if (stateName === 'checking') return 'idle';
-  if (stateName === 'unknown') return 'idle';
-  if (stateName === 'expired' || stateName === 'missing' || stateName === 'error') return 'warning';
-  return 'idle';
-}
-
-function sessionFallbackTitle(stateName: string): string {
-  if (stateName === 'checking') return '正在检测会话';
-  if (stateName === 'unknown') return '点击刷新会话';
-  return '未登录';
 }

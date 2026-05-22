@@ -67,7 +67,7 @@ pub fn export_dir(workspace_root: &Path) -> PathBuf {
 pub fn default_settings() -> AppSettings {
     AppSettings {
         last_file_root: default_workspace_root().to_string_lossy().to_string(),
-        ai_enabled: false,
+        ai_enabled: true,
         ai_base_url: String::new(),
         ai_api_key: String::new(),
         ai_model: String::new(),
