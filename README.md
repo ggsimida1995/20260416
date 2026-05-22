@@ -41,7 +41,20 @@ src-tauri/target/release/bundle/dmg/项目资料比对助手_0.1.0_aarch64.dmg
 
 ## GitHub Actions 打包
 
-推送到 `main` 或 `master` 后会触发 `Build Windows Package`，也可以在 Actions 页面手动运行。产物会上传为 `project-file-compare-windows`。
+打 `v*` tag（如 `v0.1.2`）触发 Release workflow，矩阵同时产出 Windows x64 / Windows arm64 / macOS Apple Silicon 三份产物并写入同一个 GitHub Release，自动更新（`latest.json`）覆盖全部三个平台。也可在 Actions 页面 `workflow_dispatch` 手动运行。
+
+## macOS 首次启动
+
+`.dmg` 未做 Apple 公证，首次启动会被 Gatekeeper 拦截。任选其一绕过：
+
+- **右键打开**：Finder 里右键 `.app` → 「打开」→ 弹窗里再点「打开」。
+- **去隔离属性**（终端）：
+
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/ProjectFileCompare.app
+  ```
+
+确认信任后，后续自动更新无需再操作。
 
 ## 功能状态
 

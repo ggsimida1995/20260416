@@ -25,7 +25,8 @@ import {
   Descriptions,
   Statistic,
   Radio,
-  Collapse
+  Collapse,
+  Spin
 } from '@arco-design/web-react';import {
   IconCheckCircle,
   IconDelete,
@@ -153,7 +154,7 @@ const emptyOutputs: Outputs = {
 };
 
 const emptySession: SessionStatus = {
-  state: 'unknown',
+  state: 'checking',
   message: '',
   browserName: '内置 WebView',
   account: '',
@@ -198,6 +199,8 @@ export default function App() {
   const [progress, setProgress] = useState<WorkflowProgress | null>(null);
   const [logFilter, setLogFilter] = useState<'all' | 'success' | 'failed' | 'system'>('all');
   const [appVersion, setAppVersion] = useState<string>('');
+  const [sessionRefreshing, setSessionRefreshing] = useState(false);
+  const [updateChecking, setUpdateChecking] = useState(false);
   const logEndRef = useRef<HTMLDivElement | null>(null);
 
   const settings = state?.settings ?? emptySettings;
@@ -206,6 +209,8 @@ export default function App() {
   const isBusy = busy.active;
   const isSaving = busy.active && busy.text === '保存中';
   const isSessionReady = session.state === 'ok';
+  const sessionStateRef = useRef<string>(session.state);
+  sessionStateRef.current = session.state;
 
   useEffect(() => {
     void bootstrap();
@@ -268,6 +273,32 @@ export default function App() {
       mounted = false;
       unlisten?.();
     };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return () => undefined;
+    }
+    const id = window.setInterval(async () => {
+      if (sessionStateRef.current !== 'ok') return;
+      try {
+        const next = await call<SessionStatus>('check_session');
+        setState((previous) => previous ? { ...previous, session: next } : previous);
+      } catch {
+        setState((previous) => previous ? {
+          ...previous,
+          session: {
+            state: 'missing',
+            message: '未登录',
+            browserName: '内置 WebView',
+            account: '',
+            displayName: '',
+            checkedAt: ''
+          }
+        } : previous);
+      }
+    }, 10 * 60 * 1000);
+    return () => window.clearInterval(id);
   }, []);
 
   // 解析出所有的比对日志，提供统一过滤器
@@ -444,14 +475,17 @@ export default function App() {
   }
 
   async function logout(): Promise<void> {
+    setSessionRefreshing(true);
     try {
       await call<void>('clear_login');
       await call<void>('close_login_window');
       appendUiLog('已退出登录');
       Message.success('已退出登录');
-      void refreshSession(false);
+      await refreshSession(false);
     } catch (error) {
       reportError(error);
+    } finally {
+      setSessionRefreshing(false);
     }
   }
 
@@ -470,6 +504,7 @@ export default function App() {
   }
 
   async function refreshSession(showGlobalStatus = true): Promise<void> {
+    setSessionRefreshing(true);
     try {
       const nextSession = await call<SessionStatus>('check_session');
       setState((previous) => previous ? { ...previous, session: nextSession } : previous);
@@ -492,6 +527,8 @@ export default function App() {
           }
         } : previous);
       }
+    } finally {
+      setSessionRefreshing(false);
     }
   }
 
@@ -556,6 +593,10 @@ export default function App() {
   }
 
   async function checkForUpdate(): Promise<void> {
+    if (updateChecking) {
+      return;
+    }
+    setUpdateChecking(true);
     try {
       Message.loading({ id: 'updater', content: '正在检查更新…' });
       const update = await checkUpdate();
@@ -616,6 +657,8 @@ export default function App() {
       });
     } catch (error) {
       Message.error({ id: 'updater', content: `检查更新失败：${(error as Error).message || error}` });
+    } finally {
+      setUpdateChecking(false);
     }
   }
 
@@ -679,7 +722,7 @@ export default function App() {
                     size="mini"
                     type="text"
                     icon={<IconRefresh />}
-                    loading={session.state === 'checking'}
+                    loading={sessionRefreshing}
                     onClick={() => void refreshSession()}
                   >
                     刷新
@@ -687,7 +730,7 @@ export default function App() {
                   <Button
                     size="mini"
                     type="text"
-                    disabled={session.state === 'checking'}
+                    disabled={sessionRefreshing || session.state === 'checking'}
                     onClick={() => void openLoginWindow()}
                   >
                     {isSessionReady ? '重新登录' : '登录系统'}
@@ -697,6 +740,7 @@ export default function App() {
                       size="mini"
                       type="text"
                       status="danger"
+                      disabled={sessionRefreshing}
                       onClick={() => void logout()}
                     >
                       退出
@@ -704,27 +748,29 @@ export default function App() {
                   )}
                 </Space>
               </div>
-              <Alert
-                type={session.state === 'ok' ? 'success' : (session.state === 'checking' ? 'info' : 'warning')}
-                showIcon
-                title={session.state === 'ok' ? '和利时系统联通正常' : (session.state === 'checking' ? '检测中...' : '会话失效/未登录')}
-                content={session.state === 'ok' ? `${session.displayName || session.account}已成功同步` : session.message || '点击右上「登录系统」按钮在内置窗口完成登录'}
-              />
-              {isSessionReady && (
-                <Descriptions
-                  border
-                  size="mini"
-                  column={1}
-                  layout="horizontal"
-                  style={{ marginTop: 8 }}
-                  data={[
-                    { label: '系统账号', value: session.account || '-' },
-                    { label: '中文姓名', value: session.displayName || '-' },
-                    { label: '会话来源', value: session.browserName || '-' },
-                    ...(session.checkedAt ? [{ label: '检测时间', value: session.checkedAt }] : [])
-                  ]}
+              <Spin loading={sessionRefreshing} block>
+                <Alert
+                  type={session.state === 'ok' ? 'success' : (session.state === 'checking' ? 'info' : 'warning')}
+                  showIcon
+                  title={session.state === 'ok' ? '和利时系统联通正常' : (session.state === 'checking' ? '检测中...' : '会话失效/未登录')}
+                  content={session.state === 'ok' ? `${session.displayName || session.account}已成功同步` : session.message || '点击右上「登录系统」按钮在内置窗口完成登录'}
                 />
-              )}
+                {isSessionReady && (
+                  <Descriptions
+                    border
+                    size="mini"
+                    column={1}
+                    layout="horizontal"
+                    style={{ marginTop: 8 }}
+                    data={[
+                      { label: '系统账号', value: session.account || '-' },
+                      { label: '中文姓名', value: session.displayName || '-' },
+                      { label: '会话来源', value: session.browserName || '-' },
+                      ...(session.checkedAt ? [{ label: '检测时间', value: session.checkedAt }] : [])
+                    ]}
+                  />
+                )}
+              </Spin>
             </div>
 
             <Divider style={{ margin: '12px 0' }} />
@@ -803,6 +849,7 @@ export default function App() {
               size="mini"
               type="text"
               icon={<IconSync />}
+              loading={updateChecking}
               onClick={() => void checkForUpdate()}
             >
               检查更新
