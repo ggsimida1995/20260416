@@ -35,7 +35,7 @@ npm --prefix web run tauri:build
 - `.doc` 通过 `textutil`、`antiword`、`soffice` 兜底读取。
 - PDF 文本层提取，使用 bundled PDFium。
 - PDF 签字区裁剪、远程 AI/OCR 识别、红章检测已迁移到 Rust，PDF 渲染使用 bundled PDFium。
-- Hollysys 下载流程已接入 Rust/Tauri 命令，当前 macOS 版读取本机 Chrome Hollysys Cookie 后下载附件到设置里的保存目录。
+- 下载流程已接入 Rust/Tauri 命令，当前 macOS 版读取本机 Chrome Cookie 后下载附件到设置里的保存目录。
 - 本地字段比对。
 - 中文姓名拼音近似匹配。
 - 比对成功先写入 SQLite，导出时批量写入成功台账。
@@ -44,7 +44,7 @@ npm --prefix web run tauri:build
 
 ## 尚未完全等价的能力
 
-- Hollysys 下载已支持 macOS Chrome Cookie；Windows Chrome `v10/v11` Cookie 已补基础 DPAPI/AES-GCM 解密，`v20` App-Bound Cookie 会提示不可直接解密，仍需 Windows 实机验证。
+- 下载已支持 macOS Chrome Cookie；Windows Chrome `v10/v11` Cookie 已补基础 DPAPI/AES-GCM 解密，`v20` App-Bound Cookie 会提示不可直接解密，仍需 Windows 实机验证。
 - PDFium 已随 Rust 产物打包，但仍需用真实扫描 PDF 验证裁剪区域和红章阈值。
 
 旧 Python 版本已移除，当前以 Rust + Tauri 为唯一主线。

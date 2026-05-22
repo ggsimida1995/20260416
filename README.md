@@ -1,6 +1,6 @@
 # 项目资料比对助手
 
-Rust + Tauri 桌面工具，用于复用本机已登录的 Chrome Hollysys 会话，批量下载项目关闭资料，并在本地完成资料比对、SQLite 记录和结果导出。
+Rust + Tauri 桌面工具，用于复用本机已登录的 Chrome 会话，批量下载项目关闭资料，并在本地完成资料比对、SQLite 记录和结果导出。
 
 ## 运行目录
 
@@ -50,7 +50,7 @@ src-tauri/target/release/bundle/dmg/项目资料比对助手_0.1.0_aarch64.dmg
 - PDF 渲染、签字区裁剪、红章检测使用 bundled PDFium。
 - 比对成功先写入 SQLite，用户点击导出时再批量写入成功台账。
 - 比对失败从 SQLite 导出文本记录。
-- Hollysys 下载流程已迁移到 Rust，macOS Chrome Cookie 已接入；Windows Cookie 解密仍建议用真实机器复测。
+- 下载流程已迁移到 Rust，macOS Chrome Cookie 已接入；Windows Cookie 解密仍建议用真实机器复测。
 
 ## 验证
 

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { getVersion } from '@tauri-apps/api/app';
 import { check as checkUpdate } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import {
@@ -218,6 +219,7 @@ export default function App() {
   const [settingsDraft, setSettingsDraft] = useState<Settings>(emptySettings);
   const [progress, setProgress] = useState<WorkflowProgress | null>(null);
   const [logFilter, setLogFilter] = useState<'all' | 'success' | 'failed' | 'system'>('all');
+  const [appVersion, setAppVersion] = useState<string>('');
   const logEndRef = useRef<HTMLDivElement | null>(null);
 
   const settings = state?.settings ?? emptySettings;
@@ -229,6 +231,12 @@ export default function App() {
 
   useEffect(() => {
     void bootstrap();
+  }, []);
+
+  useEffect(() => {
+    getVersion()
+      .then((v) => setAppVersion(v))
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -705,16 +713,6 @@ export default function App() {
                   打开目录
                 </Button>
               </Space>
-              <Button
-                long
-                size="small"
-                type="text"
-                icon={<IconSync />}
-                onClick={() => void checkForUpdate()}
-                style={{ marginTop: 4 }}
-              >
-                检查更新
-              </Button>
             </div>
 
             <Divider style={{ margin: '12px 0' }} />
@@ -759,6 +757,19 @@ export default function App() {
             </div>
 
           </Card>
+
+          <div className="console-footer">
+            <span className="console-footer-version">{appVersion ? `v${appVersion}` : ''}</span>
+            <Button
+              className="console-footer-update"
+              size="mini"
+              type="text"
+              icon={<IconSync />}
+              onClick={() => void checkForUpdate()}
+            >
+              检查更新
+            </Button>
+          </div>
 
         </Layout.Sider>
 
