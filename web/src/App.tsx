@@ -356,14 +356,6 @@ export default function App() {
     }
   }
 
-  async function closeLoginWindow(): Promise<void> {
-    try {
-      await call<void>('close_login_window');
-    } catch (error) {
-      showError(error);
-    }
-  }
-
   async function logout(): Promise<void> {
     setSessionRefreshing(true);
     try {
@@ -390,7 +382,7 @@ export default function App() {
       const wasAlreadyOk = sessionStateRef.current === 'ok';
       setState((previous) => previous ? { ...previous, session: nextSession } : previous);
       if (wasAlreadyOk) {
-        // SSO 重定向链会触发多次 cookies-updated 事件,第一次已经提示并关窗,后续静默更新即可。
+        // SSO 重定向链会触发多次 cookies-updated 事件,第一次已经提示并关闭窗口,后续静默更新即可。
         return;
       }
       await call<void>('close_login_window').catch(() => undefined);
@@ -610,7 +602,6 @@ export default function App() {
           sessionRefreshing={sessionRefreshing}
           onRefreshSession={() => void refreshSession()}
           onOpenLogin={() => void openLoginWindow()}
-          onCloseLogin={() => void closeLoginWindow()}
           onLogout={() => void logout()}
           fileRoot={currentFileRoot()}
           isDirSelected={isDirSelected}
