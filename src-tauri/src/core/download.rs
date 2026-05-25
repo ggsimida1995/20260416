@@ -356,6 +356,7 @@ fn fetch_detail_record(client: &Client, item: TodoItem) -> Result<DetailRecord> 
         bail!("Hollysys 会话已失效，请先在浏览器中重新登录");
     }
     let project_code = extract_detail_field(&html, "项目编号")
+        .and_then(|value| extract_project_code(&value).or(Some(value)))
         .or_else(|| extract_project_code(&item.subject))
         .ok_or_else(|| anyhow!("详情页未解析到项目编号"))?;
     let project_name =
@@ -796,13 +797,11 @@ impl Attachment {
 }
 
 fn normalize_project_code(project_code: &str) -> String {
-    clean_whitespace(project_code).replace('/', "-")
+    sanitize_path_component(&clean_whitespace(project_code).replace('/', "-"))
 }
 
 fn sanitize_filename(filename: &str) -> String {
-    let cleaned = Regex::new(r#"[\\/]+"#)
-        .map(|re| re.replace_all(&clean_whitespace(filename), "-").to_string())
-        .unwrap_or_else(|_| clean_whitespace(filename));
+    let cleaned = sanitize_path_component(&clean_whitespace(filename));
     if cleaned.is_empty() {
         "unnamed".to_string()
     } else {
@@ -811,17 +810,61 @@ fn sanitize_filename(filename: &str) -> String {
 }
 
 fn extract_project_code(value: &str) -> Option<String> {
-    Regex::new(r"项目号[:：]\s*([A-Z]+-\d+(?:/[A-Z0-9]+)?)")
+    Regex::new(r"(?i)(?:项目号|项目编号)?[:：]?\s*([A-Z]+-\d+(?:/[A-Z0-9]+)?)")
         .ok()?
         .captures(value)
-        .and_then(|captures| captures.get(1).map(|item| item.as_str().to_string()))
+        .and_then(|captures| captures.get(1).map(|item| item.as_str().to_uppercase()))
 }
 
 fn strip_html(value: &str) -> String {
-    let stripped = Regex::new(r"<[^>]+>")
+    let without_scripts = Regex::new(r"(?is)<(?:script|style)\b[^>]*>.*?</(?:script|style)>")
         .map(|re| re.replace_all(value, " ").to_string())
         .unwrap_or_else(|_| value.to_string());
+    let stripped = Regex::new(r"<[^>]+>")
+        .map(|re| re.replace_all(&without_scripts, " ").to_string())
+        .unwrap_or(without_scripts);
     clean_whitespace(&html_unescape(&stripped))
+}
+
+fn sanitize_path_component(value: &str) -> String {
+    let mut result = String::new();
+    let mut last_dash = false;
+    for ch in value.chars() {
+        let replacement = ch.is_control() || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*');
+        let next = if replacement { '-' } else { ch };
+        if next == '-' {
+            if !last_dash {
+                result.push(next);
+            }
+            last_dash = true;
+        } else {
+            result.push(next);
+            last_dash = false;
+        }
+        if result.len() >= 120 {
+            break;
+        }
+    }
+    let cleaned = result.trim_matches(&[' ', '.', '-'][..]).to_string();
+    if is_windows_reserved_name(&cleaned) {
+        format!("_{cleaned}")
+    } else {
+        cleaned
+    }
+}
+
+fn is_windows_reserved_name(value: &str) -> bool {
+    let upper = value
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL"
+            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
+            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+    )
 }
 
 fn html_unescape(value: &str) -> String {
@@ -889,8 +932,9 @@ fn json_contains_expired_signal(value: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        cookie_host_matches, extract_identity_from_text, extract_lui_user_name,
-        looks_like_login_page,
+        cookie_host_matches, extract_detail_field, extract_identity_from_text,
+        extract_lui_user_name, extract_project_code, looks_like_login_page, normalize_project_code,
+        sanitize_filename,
     };
 
     #[test]
@@ -950,5 +994,39 @@ mod tests {
         assert!(!looks_like_login_page(html));
         let identity = extract_identity_from_text(html).expect("identity from html");
         assert_eq!(identity.display_name, "冯雨翔");
+    }
+
+    #[test]
+    fn detail_field_ignores_embedded_script_text() {
+        let html = r#"
+            <table>
+              <tr>
+                <td><label>项目编号</label></td>
+                <td>
+                  BHE-25090233/01
+                  <script>//此处添加js代码 alert("noise")</script>
+                </td>
+              </tr>
+            </table>
+        "#;
+
+        assert_eq!(
+            extract_detail_field(html, "项目编号").as_deref(),
+            Some("BHE-25090233/01")
+        );
+    }
+
+    #[test]
+    fn project_code_extraction_stops_before_script_noise() {
+        let text = r#"BHE-25090233/01 //此处添加js代码 function() { invalid path | noise }"#;
+
+        assert_eq!(extract_project_code(text).as_deref(), Some("BHE-25090233/01"));
+    }
+
+    #[test]
+    fn path_components_are_safe_for_windows() {
+        assert_eq!(normalize_project_code("BHE-25090233/01|bad:name*"), "BHE-25090233-01-bad-name");
+        assert_eq!(sanitize_filename(r#"竣工/验收:报告?.pdf"#), "竣工-验收-报告-.pdf");
+        assert_eq!(sanitize_filename("CON"), "_CON");
     }
 }
