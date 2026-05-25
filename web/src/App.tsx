@@ -99,6 +99,9 @@ const emptySession: SessionStatus = {
   checkedAt: ''
 };
 
+const LOGIN_SESSION_POLL_INTERVAL_MS = 3000;
+const LOGIN_SESSION_POLL_TIMEOUT_MS = 5 * 60 * 1000;
+
 function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__);
 }
@@ -139,10 +142,17 @@ export default function App() {
   const isSaving = busy.active && busy.text === '保存中';
   const isSessionReady = session.state === 'ok';
   const sessionStateRef = useRef<string>(session.state);
+  const loginPollTimerRef = useRef<number | null>(null);
+  const loginPollRunningRef = useRef(false);
+  const loginCompletedRef = useRef(false);
   sessionStateRef.current = session.state;
 
   useEffect(() => {
     void bootstrap();
+  }, []);
+
+  useEffect(() => {
+    return () => stopLoginSessionPolling();
   }, []);
 
   useEffect(() => {
@@ -351,9 +361,81 @@ export default function App() {
   async function openLoginWindow(): Promise<void> {
     try {
       await call<void>('open_login_window');
+      startLoginSessionPolling();
+      Message.info('登录窗口已打开，登录完成后会自动同步会话');
     } catch (error) {
       showError(error);
     }
+  }
+
+  function startLoginSessionPolling(): void {
+    stopLoginSessionPolling();
+    loginCompletedRef.current = false;
+    const deadline = Date.now() + LOGIN_SESSION_POLL_TIMEOUT_MS;
+    setSessionRefreshing(true);
+    setState((previous) => previous ? {
+      ...previous,
+      session: {
+        ...previous.session,
+        state: 'checking',
+        message: '等待网页登录完成'
+      }
+    } : previous);
+
+    loginPollTimerRef.current = window.setInterval(() => {
+      if (loginPollRunningRef.current) {
+        return;
+      }
+      loginPollRunningRef.current = true;
+      void pollLoginSession(deadline).finally(() => {
+        loginPollRunningRef.current = false;
+      });
+    }, LOGIN_SESSION_POLL_INTERVAL_MS);
+  }
+
+  function stopLoginSessionPolling(): void {
+    if (loginPollTimerRef.current !== null) {
+      window.clearInterval(loginPollTimerRef.current);
+      loginPollTimerRef.current = null;
+    }
+  }
+
+  async function pollLoginSession(deadline: number): Promise<void> {
+    try {
+      const nextSession = await call<SessionStatus>('check_session');
+      if (loginCompletedRef.current) {
+        return;
+      }
+      if (nextSession.state === 'ok') {
+        await completeLoginSession(nextSession);
+        return;
+      }
+      if (Date.now() >= deadline) {
+        stopLoginSessionPolling();
+        setSessionRefreshing(false);
+        setState((previous) => previous ? { ...previous, session: nextSession } : previous);
+        Message.warning('暂未检测到网页登录成功，完成登录后可点击刷新会话');
+      }
+    } catch {
+      if (Date.now() >= deadline) {
+        stopLoginSessionPolling();
+        setSessionRefreshing(false);
+        Message.warning('暂未检测到网页登录成功，完成登录后可点击刷新会话');
+      }
+    }
+  }
+
+  async function completeLoginSession(nextSession: SessionStatus): Promise<void> {
+    if (loginCompletedRef.current) {
+      return;
+    }
+    loginCompletedRef.current = true;
+    stopLoginSessionPolling();
+    setSessionRefreshing(false);
+    setState((previous) => previous ? { ...previous, session: nextSession } : previous);
+    await call<void>('close_login_window').catch(() => undefined);
+    appendUiLog(`登录成功：${nextSession.displayName || nextSession.account || ''}`);
+    Message.success('登录成功');
   }
 
   async function logout(): Promise<void> {
@@ -380,6 +462,10 @@ export default function App() {
         return;
       }
       const wasAlreadyOk = sessionStateRef.current === 'ok';
+      if (loginPollTimerRef.current !== null) {
+        await completeLoginSession(nextSession);
+        return;
+      }
       setState((previous) => previous ? { ...previous, session: nextSession } : previous);
       if (wasAlreadyOk) {
         // SSO 重定向链会触发多次 cookies-updated 事件,第一次已经提示并关闭窗口,后续静默更新即可。
