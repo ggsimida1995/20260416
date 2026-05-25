@@ -8,6 +8,7 @@ pub fn normalize_text_value(value: Option<&Value>) -> String {
         Some(Value::String(text)) => normalize_text(text),
         Some(Value::Number(number)) => normalize_text(&number.to_string()),
         Some(Value::Bool(value)) => value.to_string(),
+        Some(Value::Null) => String::new(),
         Some(other) => normalize_text(&other.to_string()),
         None => String::new(),
     }
@@ -125,16 +126,25 @@ pub fn normalize_amount(value: Option<&Value>) -> Option<f64> {
 }
 
 pub fn names_match_by_loose_pinyin(left: &str, right: &str) -> bool {
-    let left = normalize_compact_text(left);
-    let right = normalize_compact_text(right);
+    let left_text = normalize_text(left);
+    let right_text = normalize_text(right);
+    if left_text.is_empty() || right_text.is_empty() {
+        return false;
+    }
+    if left_text == right_text {
+        return true;
+    }
+
+    let left = normalize_compact_text(&left_text);
+    let right = normalize_compact_text(&right_text);
     if left.is_empty() || right.is_empty() {
+        return false;
+    }
+    if !contains_chinese(&left) || !contains_chinese(&right) {
         return false;
     }
     if left == right {
         return true;
-    }
-    if !contains_chinese(&left) || !contains_chinese(&right) {
-        return false;
     }
     normalize_name_pinyin(&left) == normalize_name_pinyin(&right)
 }
