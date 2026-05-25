@@ -1,12 +1,18 @@
 use crate::core::config::app_state_db_path;
 use crate::db::app_state::{AppStateStore, CookieEntry};
 use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Emitter, Manager, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 const LOGIN_WINDOW_LABEL: &str = "login";
 const HOLLYSYS_URL: &str = "https://www.hollysys.net/";
 const HOLLYSYS_HOST: &str = "www.hollysys.net";
+
+#[cfg(target_os = "windows")]
+const LOGIN_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36";
+#[cfg(target_os = "macos")]
 const LOGIN_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36";
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+const LOGIN_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36";
 
 #[tauri::command]
 pub async fn open_login_window(app: AppHandle) -> Result<(), String> {
@@ -25,7 +31,7 @@ pub async fn open_login_window(app: AppHandle) -> Result<(), String> {
 
     let login_url: Url = HOLLYSYS_URL.parse().map_err(to_string)?;
     let app_handle = app.clone();
-    WebviewWindowBuilder::new(
+    let login_window = WebviewWindowBuilder::new(
         &app,
         LOGIN_WINDOW_LABEL,
         WebviewUrl::External(login_url),
@@ -53,6 +59,13 @@ pub async fn open_login_window(app: AppHandle) -> Result<(), String> {
     })
     .build()
     .map_err(to_string)?;
+    let login_window_for_close = login_window.clone();
+    login_window.on_window_event(move |event| {
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = login_window_for_close.destroy();
+        }
+    });
 
     Ok(())
 }
@@ -92,7 +105,7 @@ fn build_autofill_script(account: &str, password: &str) -> String {
 #[tauri::command]
 pub async fn close_login_window(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(LOGIN_WINDOW_LABEL) {
-        window.close().map_err(to_string)?;
+        window.destroy().map_err(to_string)?;
     }
     Ok(())
 }
