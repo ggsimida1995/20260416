@@ -5,7 +5,6 @@ use crate::core::config::{
 use crate::core::discovery::project_dir_names;
 use crate::core::download::{check_session_status, unchecked_session_status, SessionStatus};
 use crate::core::models::{AppSettings, WorkflowSummary};
-use crate::core::secret_store;
 use crate::core::workflow::summary;
 use crate::db::app_state::AppStateStore;
 use serde::Serialize;
@@ -30,9 +29,7 @@ pub fn bootstrap() -> Result<AppState, String> {
 
 #[tauri::command]
 pub fn save_settings(payload: AppSettings) -> Result<AppState, String> {
-    let mut settings = normalize_settings(payload);
-    secret_store::save_password(&settings.password);
-    settings.password.clear();
+    let settings = normalize_settings(payload);
     AppStateStore::new(app_state_db_path())
         .save_settings(&settings)
         .map_err(to_string)?;
@@ -101,13 +98,20 @@ pub fn build_state() -> anyhow::Result<AppState> {
 pub fn load_settings() -> anyhow::Result<AppSettings> {
     let store = AppStateStore::new(app_state_db_path());
     let raw_settings = store.load_settings()?.unwrap_or_else(default_settings);
-    let mut settings = normalize_settings(raw_settings.clone());
-    let legacy_password = std::mem::take(&mut settings.password);
-    if !legacy_password.is_empty() {
-        secret_store::save_password(&legacy_password);
+    let mut settings = normalize_settings(raw_settings);
+    let legacy_password = if settings.password.is_empty() {
+        crate::core::secret_store::load_password()
+    } else {
+        None
+    };
+    let migrated_from_keychain = legacy_password.is_some();
+    if let Some(password) = legacy_password {
+        settings.password = password;
     }
     store.save_settings(&settings)?;
-    settings.password = secret_store::load_password().unwrap_or_default();
+    if migrated_from_keychain {
+        crate::core::secret_store::save_password("");
+    }
     Ok(settings)
 }
 

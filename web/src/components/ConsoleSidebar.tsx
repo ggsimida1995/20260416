@@ -43,6 +43,7 @@ type Props = {
   sessionRefreshing: boolean;
   onRefreshSession: () => void;
   onOpenLogin: () => void;
+  onCloseLogin: () => void;
   onLogout: () => void;
   fileRoot: string;
   isDirSelected: boolean;
@@ -66,6 +67,7 @@ export function ConsoleSidebar({
   sessionRefreshing,
   onRefreshSession,
   onOpenLogin,
+  onCloseLogin,
   onLogout,
   fileRoot,
   isDirSelected,
@@ -119,6 +121,14 @@ export function ConsoleSidebar({
                 onClick={onOpenLogin}
               >
                 {isSessionReady ? '重新登录' : '登录系统'}
+              </Button>
+              <Button
+                size="mini"
+                type="text"
+                disabled={sessionRefreshing}
+                onClick={onCloseLogin}
+              >
+                关窗
               </Button>
               {isSessionReady && (
                 <Button

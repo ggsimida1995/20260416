@@ -82,7 +82,7 @@ export function SettingsModal({ visible, draft, isSaving, onClose, onSave, onPat
             <Alert
               type="info"
               style={{ marginBottom: 12 }}
-              content="保存后,点击「登录系统」时账号密码会自动填到弹出的登录页面,你只需点击页面里的登录按钮。密码加密存储在系统钥匙串(macOS Keychain / Windows 凭据管理器)。"
+              content="保存后,点击「登录系统」时账号密码会自动填到弹出的登录页面,你只需点击页面里的登录按钮。账号密码会保存在本机 SQLite 配置中。"
             />
             <Form layout="horizontal" labelAlign="left" labelCol={{ span: 5 }} wrapperCol={{ span: 19 }} colon={false}>
               <Form.Item label="账号">

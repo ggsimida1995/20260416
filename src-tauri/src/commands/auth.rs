@@ -17,11 +17,7 @@ pub async fn open_login_window(app: AppHandle) -> Result<(), String> {
     }
 
     let settings = crate::commands::state::load_settings().map_err(|e| e.to_string())?;
-    let autofill_script = if !settings.account.is_empty() && !settings.password.is_empty() {
-        Some(build_autofill_script(&settings.account, &settings.password))
-    } else {
-        None
-    };
+    let login_helper_script = build_login_helper_script(&settings.account, &settings.password);
 
     let login_url: Url = HOLLYSYS_URL.parse().map_err(to_string)?;
     let app_handle = app.clone();
@@ -33,14 +29,16 @@ pub async fn open_login_window(app: AppHandle) -> Result<(), String> {
     .title("登录账号")
     .inner_size(1024.0, 720.0)
     .min_inner_size(800.0, 600.0)
+    .resizable(true)
+    .closable(true)
+    .focused(true)
+    .center()
     .user_agent(LOGIN_USER_AGENT)
     .on_page_load(move |window, payload| {
         if payload.event() != PageLoadEvent::Finished {
             return;
         }
-        if let Some(script) = autofill_script.as_ref() {
-            let _ = window.eval(script);
-        }
+        let _ = window.eval(&login_helper_script);
         if let Err(error) = capture_cookies(&window) {
             eprintln!("[auth] capture cookies failed: {error}");
             return;
@@ -53,23 +51,53 @@ pub async fn open_login_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn build_autofill_script(account: &str, password: &str) -> String {
+fn build_login_helper_script(account: &str, password: &str) -> String {
     let user_json = serde_json::to_string(account).unwrap_or_else(|_| "\"\"".into());
     let pass_json = serde_json::to_string(password).unwrap_or_else(|_| "\"\"".into());
     format!(
         r#"(function(){{
-  var u = document.getElementById('username_show');
-  var p = document.getElementById('password_show');
-  if (u) {{
-    u.value = {user};
-    u.dispatchEvent(new Event('input', {{bubbles: true}}));
-    u.dispatchEvent(new Event('change', {{bubbles: true}}));
-    u.dispatchEvent(new Event('blur', {{bubbles: true}}));
+  function first(selectors) {{
+    for (var i = 0; i < selectors.length; i++) {{
+      var el = document.querySelector(selectors[i]);
+      if (el) return el;
+    }}
+    return null;
   }}
-  if (p) {{
-    p.value = {pass};
-    p.dispatchEvent(new Event('input', {{bubbles: true}}));
-    p.dispatchEvent(new Event('change', {{bubbles: true}}));
+  function setValue(el, value) {{
+    if (!el) return;
+    el.focus();
+    var setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+    if (setter && setter.set) setter.set.call(el, value);
+    else el.value = value;
+    ['keydown','keypress','input','keyup','change','blur'].forEach(function(type) {{
+      el.dispatchEvent(new Event(type, {{ bubbles: true, cancelable: true }}));
+    }});
+  }}
+  var u = first(['#username_show', '#username', 'input[name="username"]', 'input[name="j_username"]', 'input[name="loginName"]', 'input[type="text"]']);
+  var p = first(['#password_show', '#password', 'input[name="password"]', 'input[name="j_password"]', 'input[type="password"]']);
+  if ({user}.length) setValue(u, {user});
+  if ({pass}.length) setValue(p, {pass});
+  if (!document.getElementById('project-file-compare-login-helper')) {{
+    var bar = document.createElement('div');
+    bar.id = 'project-file-compare-login-helper';
+    bar.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#fff;border:1px solid #d9d9d9;box-shadow:0 6px 18px rgba(0,0,0,.18);border-radius:8px;padding:10px;font:14px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = '尝试登录';
+    btn.style.cssText = 'height:30px;padding:0 12px;border:0;border-radius:4px;background:#165dff;color:#fff;cursor:pointer;';
+    btn.onclick = function() {{
+      var target = first(['button[type="submit"]', 'input[type="submit"]', '#login_button', '#loginBtn', '.login-button', '.login-btn', 'button']);
+      if (target) {{
+        target.disabled = false;
+        target.removeAttribute('disabled');
+        target.setAttribute('aria-disabled', 'false');
+        target.click();
+      }}
+      else if (p && p.form) p.form.submit();
+      else if (u && u.form) u.form.submit();
+    }};
+    bar.appendChild(btn);
+    document.body.appendChild(bar);
   }}
 }})();"#,
         user = user_json,

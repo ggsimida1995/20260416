@@ -15,6 +15,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - arch: x64
@@ -26,6 +27,7 @@ jobs:
           - arch: aarch64-darwin
             runner: macos-14
             target: aarch64-apple-darwin
+            bundle: app,dmg
 
     steps:
       - name: Checkout
@@ -65,7 +67,7 @@ jobs:
           releaseBody: "本次更新内容详见提交记录。"
           releaseDraft: false
           prerelease: false
-          args: --target ${{ matrix.target }}
+          args: --target ${{ matrix.target }} ${{ matrix.bundle && format('--bundles {0}', matrix.bundle) || '' }}
 
       - name: Upload portable executable
         if: runner.os == 'Windows'

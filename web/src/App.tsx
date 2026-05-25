@@ -356,6 +356,14 @@ export default function App() {
     }
   }
 
+  async function closeLoginWindow(): Promise<void> {
+    try {
+      await call<void>('close_login_window');
+    } catch (error) {
+      showError(error);
+    }
+  }
+
   async function logout(): Promise<void> {
     setSessionRefreshing(true);
     try {
@@ -602,6 +610,7 @@ export default function App() {
           sessionRefreshing={sessionRefreshing}
           onRefreshSession={() => void refreshSession()}
           onOpenLogin={() => void openLoginWindow()}
+          onCloseLogin={() => void closeLoginWindow()}
           onLogout={() => void logout()}
           fileRoot={currentFileRoot()}
           isDirSelected={isDirSelected}
@@ -698,4 +707,3 @@ function applyTheme(mode: string): () => void {
   }
   return () => undefined;
 }
-
