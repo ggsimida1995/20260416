@@ -16,6 +16,13 @@ pub async fn open_login_window(app: AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
+    let settings = crate::commands::state::load_settings().map_err(|e| e.to_string())?;
+    let autofill_script = if !settings.account.is_empty() && !settings.password.is_empty() {
+        Some(build_autofill_script(&settings.account, &settings.password))
+    } else {
+        None
+    };
+
     let login_url: Url = HOLLYSYS_URL.parse().map_err(to_string)?;
     let app_handle = app.clone();
     WebviewWindowBuilder::new(
@@ -31,6 +38,9 @@ pub async fn open_login_window(app: AppHandle) -> Result<(), String> {
         if payload.event() != PageLoadEvent::Finished {
             return;
         }
+        if let Some(script) = autofill_script.as_ref() {
+            let _ = window.eval(script);
+        }
         if let Err(error) = capture_cookies(&window) {
             eprintln!("[auth] capture cookies failed: {error}");
             return;
@@ -41,6 +51,30 @@ pub async fn open_login_window(app: AppHandle) -> Result<(), String> {
     .map_err(to_string)?;
 
     Ok(())
+}
+
+fn build_autofill_script(account: &str, password: &str) -> String {
+    let user_json = serde_json::to_string(account).unwrap_or_else(|_| "\"\"".into());
+    let pass_json = serde_json::to_string(password).unwrap_or_else(|_| "\"\"".into());
+    format!(
+        r#"(function(){{
+  var u = document.getElementById('username_show');
+  var p = document.getElementById('password_show');
+  if (u) {{
+    u.value = {user};
+    u.dispatchEvent(new Event('input', {{bubbles: true}}));
+    u.dispatchEvent(new Event('change', {{bubbles: true}}));
+    u.dispatchEvent(new Event('blur', {{bubbles: true}}));
+  }}
+  if (p) {{
+    p.value = {pass};
+    p.dispatchEvent(new Event('input', {{bubbles: true}}));
+    p.dispatchEvent(new Event('change', {{bubbles: true}}));
+  }}
+}})();"#,
+        user = user_json,
+        pass = pass_json
+    )
 }
 
 #[tauri::command]

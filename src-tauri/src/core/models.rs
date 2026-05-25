@@ -42,6 +42,10 @@ pub struct AppSettings {
     pub image_max_kb: i64,
     #[serde(default = "default_theme_mode", rename = "themeMode")]
     pub theme_mode: String,
+    #[serde(default, rename = "account")]
+    pub account: String,
+    #[serde(default, rename = "password")]
+    pub password: String,
 }
 
 #[derive(Debug, Clone, Default)]

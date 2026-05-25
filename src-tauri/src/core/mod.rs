@@ -1,7 +1,9 @@
 pub mod compare;
+pub mod cancel;
 pub mod config;
 pub mod discovery;
 pub mod download;
 pub mod models;
 pub mod normalizers;
+pub mod secret_store;
 pub mod workflow;

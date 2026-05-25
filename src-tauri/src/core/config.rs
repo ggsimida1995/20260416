@@ -76,6 +76,8 @@ pub fn default_settings() -> AppSettings {
         request_timeout_seconds: 30,
         image_max_kb: 100,
         theme_mode: "light".to_string(),
+        account: String::new(),
+        password: String::new(),
     }
 }
 

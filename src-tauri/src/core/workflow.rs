@@ -1,3 +1,4 @@
+use crate::core::cancel::CancelFlag;
 use crate::core::compare::compare_project_data;
 use crate::core::config::{
     app_state_db_path, default_settings, ensure_workspace_layout, success_projects_root,
@@ -28,6 +29,7 @@ const MAX_COMPARE_WORKERS: usize = 4;
 
 pub fn run_compare_with_progress<F>(
     workspace_root: &Path,
+    cancel: &CancelFlag,
     mut progress: F,
 ) -> Result<WorkflowSummary>
 where
@@ -72,6 +74,7 @@ where
         &state_db_path,
         workspace_root,
         worker_count,
+        cancel,
         |done, result| {
             let message = if result.error_details.is_empty() {
                 format!("已处理 {}", result.project_name)
@@ -143,6 +146,7 @@ fn compare_projects_until_first_error<F>(
     state_db_path: &Path,
     workspace_root: &Path,
     worker_count: usize,
+    cancel: &CancelFlag,
     mut progress: F,
 ) -> Result<Vec<ProjectCompareResult>>
 where
@@ -178,9 +182,10 @@ where
         let workspace_root = Arc::clone(&workspace_root);
         let next_index = Arc::clone(&next_index);
         let abort = Arc::clone(&abort);
+        let cancel = cancel.clone();
         let result_tx = result_tx.clone();
         pool.spawn(move || loop {
-            if abort.load(Ordering::Relaxed) {
+            if abort.load(Ordering::Relaxed) || cancel.is_cancelled() {
                 break;
             }
             let index = next_index.fetch_add(1, Ordering::Relaxed);
@@ -217,6 +222,9 @@ where
     }
 
     results.sort_by_key(|item| item.order);
+    if cancel.is_cancelled() {
+        return Err(anyhow::anyhow!("已取消"));
+    }
     if let Some(reason) = abort_reason {
         return Err(anyhow::anyhow!("{reason}"));
     }

@@ -1,3 +1,4 @@
+use crate::core::cancel::CancelFlag;
 use crate::core::config::app_state_db_path;
 use crate::core::models::AppSettings;
 use crate::db::app_state::AppStateStore;
@@ -79,6 +80,7 @@ pub fn run_download(
     file_root: &Path,
     skip_project_codes: &HashSet<String>,
     settings: &AppSettings,
+    cancel: &CancelFlag,
 ) -> Result<DownloadSummary> {
     std::fs::create_dir_all(file_root)?;
     let timeout = settings.request_timeout_seconds.max(1) as u64;
@@ -91,8 +93,16 @@ pub fn run_download(
     };
 
     for (category_id, category_name) in AGGREGATION_CATEGORIES {
+        if cancel.is_cancelled() {
+            summary.errors.push("已取消".to_string());
+            return Ok(summary);
+        }
         let items = fetch_todo_items(&client, category_id, category_name)?;
         for item in items {
+            if cancel.is_cancelled() {
+                summary.errors.push("已取消".to_string());
+                return Ok(summary);
+            }
             let record = match fetch_detail_record(&client, item.clone()) {
                 Ok(record) => record,
                 Err(error) => {

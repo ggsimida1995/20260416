@@ -6,6 +6,7 @@ mod writers;
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(crate::core::cancel::CancelFlag::new())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -24,6 +25,7 @@ pub fn run() {
             commands::workflow::run_compare_only,
             commands::workflow::run_batch,
             commands::workflow::run_download_only,
+            commands::workflow::cancel_workflow,
             commands::workflow::export_success_results,
             commands::workflow::export_error_results,
             commands::workflow::clear_runtime_logs
