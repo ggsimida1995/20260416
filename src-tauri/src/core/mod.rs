@@ -1,3 +1,4 @@
+pub mod browser_login;
 pub mod compare;
 pub mod cancel;
 pub mod config;

@@ -147,6 +147,11 @@ pub fn check_session_status(settings: &AppSettings) -> SessionStatus {
         checked_at: now,
     };
 
+    #[cfg(target_os = "windows")]
+    if let Err(error) = import_external_login_cookies() {
+        eprintln!("[session] import external login cookies skipped: {error:#}");
+    }
+
     let timeout = settings.request_timeout_seconds.max(1) as u64;
     let client = match build_authenticated_client_from_stored_cookies(timeout) {
         Ok(client) => client,
@@ -172,6 +177,16 @@ pub fn check_session_status(settings: &AppSettings) -> SessionStatus {
         }
     }
     status
+}
+
+#[cfg(target_os = "windows")]
+fn import_external_login_cookies() -> Result<()> {
+    let cookies = crate::core::browser_login::import_external_login_cookies()?;
+    if cookies.is_empty() {
+        return Ok(());
+    }
+    AppStateStore::new(app_state_db_path()).save_cookies(&cookies)?;
+    Ok(())
 }
 
 pub fn unchecked_session_status(_settings: &AppSettings) -> SessionStatus {

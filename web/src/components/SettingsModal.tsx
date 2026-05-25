@@ -82,7 +82,7 @@ export function SettingsModal({ visible, draft, isSaving, onClose, onSave, onPat
             <Alert
               type="info"
               style={{ marginBottom: 12 }}
-              content="保存后,点击「登录系统」时账号密码会自动填到弹出的登录页面,你只需点击页面里的登录按钮。账号密码会保存在本机 SQLite 配置中。"
+              content="保存后,Mac 会在内置登录页自动填入账号密码;Windows 会打开独立 Edge/Chrome 登录窗口,登录完成后回到应用刷新会话。账号密码会保存在本机 SQLite 配置中。"
             />
             <Form layout="horizontal" labelAlign="left" labelCol={{ span: 5 }} wrapperCol={{ span: 19 }} colon={false}>
               <Form.Item label="账号">

@@ -16,6 +16,14 @@ const LOGIN_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.
 
 #[tauri::command]
 pub async fn open_login_window(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        crate::core::browser_login::open_external_login().map_err(to_string)?;
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
     if let Some(existing) = app.get_webview_window(LOGIN_WINDOW_LABEL) {
         existing.show().map_err(to_string)?;
         existing.set_focus().map_err(to_string)?;
@@ -68,6 +76,7 @@ pub async fn open_login_window(app: AppHandle) -> Result<(), String> {
     });
 
     Ok(())
+    }
 }
 
 fn build_autofill_script(account: &str, password: &str) -> String {
