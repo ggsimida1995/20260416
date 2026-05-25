@@ -22,3 +22,7 @@ error/
 .pikiclaw/*
 !.pikiclaw/skills/
 !.pikiclaw/skills/**
+
+# 本地工具产物
+.codegraph/
+.cursor/
