@@ -7,6 +7,7 @@ const LOGIN_WINDOW_LABEL: &str = "login";
 const PREVIEW_WINDOW_LABEL: &str = "session-preview";
 const HOLLYSYS_URL: &str = "https://www.hollysys.net/";
 const HOLLYSYS_HOST: &str = "www.hollysys.net";
+const HOLLYSYS_TODO_PREVIEW_URL: &str = "https://www.hollysys.net/sys/notify/sys_notify_todo/sysNotifyMainIndex.do?method=list&from=aggregation&dataType=todo&fdType=13&aggregationId=18a032b3695468f23f38a0f40d5a3602&pageno=1&rowsize=100&pageNo=1&rowSize=100&pageSize=100";
 
 #[cfg(target_os = "windows")]
 const LOGIN_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36";
@@ -79,7 +80,7 @@ pub async fn open_login_window(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn open_session_preview_window(app: AppHandle) -> Result<(), String> {
-    let preview_url: Url = HOLLYSYS_URL.parse().map_err(to_string)?;
+    let preview_url: Url = HOLLYSYS_TODO_PREVIEW_URL.parse().map_err(to_string)?;
     if let Some(existing) = app.get_webview_window(PREVIEW_WINDOW_LABEL) {
         apply_stored_cookies(&existing)?;
         existing.navigate(preview_url).map_err(to_string)?;
