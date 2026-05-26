@@ -176,7 +176,11 @@ pub fn check_session_status(settings: &AppSettings) -> SessionStatus {
         Ok(identity) => {
             status.state = "ok".to_string();
             status.message = "会话可用".to_string();
-            status.account = identity.account;
+            status.account = if identity.account.is_empty() {
+                settings.account.clone()
+            } else {
+                identity.account
+            };
             status.display_name = identity.display_name;
         }
         Err(error) => {
@@ -288,6 +292,9 @@ fn verify_session_once(client: &Client, category_id: &str) -> Result<SessionIden
     if identity.account.is_empty() || identity.display_name.is_empty() {
         identity.merge(fetch_identity_from_pages(client));
     }
+    if !identity.is_confirmed() {
+        bail!("已读取到 Cookie，但未确认当前登录账号，请重新登录");
+    }
     Ok(identity)
 }
 
@@ -298,6 +305,10 @@ struct SessionIdentity {
 }
 
 impl SessionIdentity {
+    fn is_confirmed(&self) -> bool {
+        !self.account.is_empty() || !self.display_name.is_empty()
+    }
+
     fn merge(&mut self, other: Option<SessionIdentity>) {
         let Some(other) = other else {
             return;
@@ -1033,7 +1044,7 @@ mod tests {
     use super::{
         build_list_url, cookie_host_matches, extract_detail_field, extract_identity_from_text,
         extract_lui_user_name, extract_project_code, looks_like_login_page, normalize_project_code,
-        parse_todo_list_page, sanitize_filename, todo_pagination_complete,
+        parse_todo_list_page, sanitize_filename, todo_pagination_complete, SessionIdentity,
     };
     use serde_json::json;
 
@@ -1164,5 +1175,22 @@ mod tests {
         assert_eq!(page.items[0].subject, "项目号：BHE-TEST/01");
         assert!(!todo_pagination_complete(1, 1, page.total_count, page.total_pages));
         assert!(todo_pagination_complete(2, 2, page.total_count, page.total_pages));
+    }
+
+    #[test]
+    fn empty_session_identity_is_not_confirmed() {
+        let empty = SessionIdentity::default();
+        let with_account = SessionIdentity {
+            account: "user1".to_string(),
+            display_name: String::new(),
+        };
+        let with_name = SessionIdentity {
+            account: String::new(),
+            display_name: "张三".to_string(),
+        };
+
+        assert!(!empty.is_confirmed());
+        assert!(with_account.is_confirmed());
+        assert!(with_name.is_confirmed());
     }
 }

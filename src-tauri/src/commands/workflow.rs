@@ -150,6 +150,9 @@ fn append_download_summary_logs(
     for error in &summary.errors {
         store.append_runtime_log(&format!("[网页阶段] 错误: {error}"))?;
     }
+    if summary.processed_count == 0 && summary.skipped_projects.is_empty() && summary.errors.is_empty() {
+        store.append_runtime_log("[网页阶段] 未发现待下载项目，请确认当前登录账号和待办列表")?;
+    }
     Ok(())
 }
 

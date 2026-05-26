@@ -598,8 +598,11 @@ export default function App() {
 
   async function runDownload(): Promise<void> {
     await runPlainAction('下载中', '下载完成', async () => {
-      sync(await call<AppState>('run_download_only', { fileRoot: currentFileRoot() }));
-    }, { showProgress: true, resetLogs: true });
+      const nextState = await call<AppState>('run_download_only', { fileRoot: currentFileRoot() });
+      sync(nextState);
+      const summary = latestDownloadSummary(nextState.logs);
+      Message.success(summary || '下载完成');
+    }, { showProgress: true, resetLogs: true, toast: false });
   }
 
   async function cancelWorkflow(): Promise<void> {
@@ -790,6 +793,18 @@ function defaultProgressFor(text: string): WorkflowProgress | null {
     projectName: '',
     projectLog: null
   };
+}
+
+function latestDownloadSummary(logs: string[]): string | null {
+  for (let index = logs.length - 1; index >= 0; index--) {
+    const match = logs[index].match(/\[网页阶段\] 完成: 下载=(\d+) \| 跳过=(\d+) \| 错误=(\d+)/);
+    if (!match) {
+      continue;
+    }
+    const [, downloaded, skipped, errors] = match;
+    return `下载完成：下载 ${downloaded} 个，跳过 ${skipped} 个，错误 ${errors} 个`;
+  }
+  return null;
 }
 
 function normalizeThemeMode(value: string): string {
