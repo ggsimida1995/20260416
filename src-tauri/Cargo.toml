@@ -1,6 +1,6 @@
 [package]
 name = "project-file-compare"
-version = "0.1.15"
+version = "0.1.16"
 description = "项目资料比对助手"
 authors = ["Project File Compare"]
 edition = "2021"

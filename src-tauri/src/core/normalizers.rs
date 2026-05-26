@@ -38,9 +38,19 @@ pub fn normalize_phone(text: &str) -> String {
 pub fn normalize_project_code(text: &str) -> String {
     normalize_text(text)
         .chars()
-        .filter(|ch| !ch.is_whitespace())
+        .filter_map(normalize_project_code_char)
         .collect::<String>()
         .to_uppercase()
+}
+
+fn normalize_project_code_char(ch: char) -> Option<char> {
+    if ch.is_whitespace() || matches!(ch, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}') {
+        return None;
+    }
+    Some(match ch {
+        '／' | '⁄' | '∕' => '/',
+        _ => ch,
+    })
 }
 
 pub fn normalize_compact_text(text: &str) -> String {
@@ -211,8 +221,23 @@ mod tests {
 
     #[test]
     fn normalize_project_code_uppercases_and_strips_whitespace() {
-        assert_eq!(normalize_project_code("  bhe-25080117-01 "), "BHE-25080117-01");
+        assert_eq!(
+            normalize_project_code("  bhe-25080117-01 "),
+            "BHE-25080117-01"
+        );
         assert_eq!(normalize_project_code("lhe 25090002 b1"), "LHE25090002B1");
+        assert_eq!(
+            normalize_project_code("BHE-25110001 / Z1"),
+            "BHE-25110001/Z1"
+        );
+        assert_eq!(
+            normalize_project_code("BHE-25110001\u{200B}/\u{FEFF}Z1"),
+            "BHE-25110001/Z1"
+        );
+        assert_eq!(
+            normalize_project_code("BHE-25110001 ／ Z1"),
+            "BHE-25110001/Z1"
+        );
     }
 
     #[test]

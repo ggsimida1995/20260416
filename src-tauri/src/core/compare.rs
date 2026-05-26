@@ -374,7 +374,7 @@ fn _normalize_date_from_value(value: Option<&Value>) -> Option<NaiveDate> {
 #[cfg(test)]
 mod tests {
     use super::compare_project_data;
-    use crate::core::models::{DocxData, PdfData};
+    use crate::core::models::{DocxData, PdfData, WebData};
     use chrono::NaiveDate;
     use serde_json::Value;
     use std::collections::BTreeMap;
@@ -475,18 +475,22 @@ mod tests {
         let mut fields = base_fields("49", "2026-04-27");
         fields.insert(
             "项目编号".to_string(),
-            Value::String("BHE - 25090004 - 01".to_string()),
+            Value::String("BHE-25110001 ／ Z1".to_string()),
         );
         fields.insert(
             "项目全称".to_string(),
             Value::String("测试 项目".to_string()),
         );
         let mut docx = base_docx();
-        docx.project_code = "BHE-25090004-01".to_string();
+        docx.project_code = "BHE-25110001 / Z1".to_string();
         docx.project_name = "测试项目".to_string();
+        let web = WebData {
+            project_code: "BHE-25110001/Z1".to_string(),
+            project_name: "测试项目".to_string(),
+        };
         let result = compare_project_data(
             &fields,
-            None,
+            Some(&web),
             &docx,
             &base_pdf(NaiveDate::from_ymd_opt(2026, 4, 27).unwrap(), false),
         );
