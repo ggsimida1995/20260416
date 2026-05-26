@@ -3,6 +3,7 @@ use crate::core::normalizers::{
     normalize_date, normalize_phone, normalize_project_code, normalize_text,
 };
 use anyhow::{anyhow, Context, Result};
+use encoding_rs::GB18030;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use regex::Regex;
@@ -57,6 +58,7 @@ fn read_docx_text(path: &Path) -> Result<String> {
 fn read_doc_text(path: &Path) -> Result<String> {
     for reader in [
         read_doc_text_plain as fn(&Path) -> Option<String>,
+        read_doc_text_from_binary_strings,
         read_doc_text_with_textutil,
         read_doc_text_with_antiword,
         read_doc_text_with_soffice,
@@ -75,16 +77,24 @@ fn read_doc_text(path: &Path) -> Result<String> {
 
 fn read_doc_text_plain(path: &Path) -> Option<String> {
     let bytes = std::fs::read(path).ok()?;
-    for encoding in ["utf-8", "gb18030", "utf-16"] {
-        let text = match encoding {
-            "utf-8" => String::from_utf8(bytes.clone()).ok(),
-            _ => None,
-        };
-        if let Some(text) = text {
-            let normalized = normalize_text(&strip_rtf_markup(&text));
-            if looks_like_doc_text(&normalized) {
-                return Some(normalized);
-            }
+    if let Ok(text) = String::from_utf8(bytes) {
+        let normalized = normalize_text(&strip_rtf_markup(&text));
+        if looks_like_doc_text(&normalized) {
+            return Some(normalized);
+        }
+    }
+    None
+}
+
+fn read_doc_text_from_binary_strings(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    for text in [
+        extract_utf16le_text_runs(&bytes),
+        extract_gb18030_text_runs(&bytes),
+    ] {
+        let normalized = normalize_text(&strip_rtf_markup(&text));
+        if looks_like_doc_text(&normalized) {
+            return Some(normalized);
         }
     }
     None
@@ -304,9 +314,80 @@ fn looks_like_doc_text(text: &str) -> bool {
         .any(|label| text.contains(label))
 }
 
+fn extract_utf16le_text_runs(bytes: &[u8]) -> String {
+    let mut best = String::new();
+    for offset in [0usize, 1] {
+        let mut chars = Vec::new();
+        let mut index = offset;
+        while index + 1 < bytes.len() {
+            let value = u16::from_le_bytes([bytes[index], bytes[index + 1]]);
+            let ch = char::from_u32(value as u32).unwrap_or('\0');
+            chars.push(ch);
+            index += 2;
+        }
+        let text = collect_text_runs(chars.into_iter());
+        let score = score_doc_text(&text);
+        let best_score = score_doc_text(&best);
+        if score > best_score || score == best_score && text.len() > best.len() {
+            best = text;
+        }
+    }
+    best
+}
+
+fn extract_gb18030_text_runs(bytes: &[u8]) -> String {
+    let (text, _, _) = GB18030.decode(bytes);
+    collect_text_runs(text.chars())
+}
+
+fn collect_text_runs(chars: impl Iterator<Item = char>) -> String {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    for ch in chars {
+        if is_doc_text_char(ch) {
+            current.push(if ch.is_whitespace() { ' ' } else { ch });
+        } else {
+            push_doc_text_run(&mut parts, &mut current);
+        }
+    }
+    push_doc_text_run(&mut parts, &mut current);
+    parts.join(" ")
+}
+
+fn push_doc_text_run(parts: &mut Vec<String>, current: &mut String) {
+    let run = normalize_text(current);
+    current.clear();
+    let useful_chars = run
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || is_cjk(*ch))
+        .count();
+    if useful_chars >= 2 {
+        parts.push(run);
+    }
+}
+
+fn is_doc_text_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric()
+        || ch.is_ascii_punctuation()
+        || ch.is_whitespace()
+        || is_cjk(ch)
+        || matches!(ch, '，' | '。' | '：' | '；' | '（' | '）' | '、' | '—')
+}
+
+fn is_cjk(ch: char) -> bool {
+    ('\u{4e00}'..='\u{9fff}').contains(&ch)
+}
+
+fn score_doc_text(text: &str) -> usize {
+    ["项目编号", "项目全称", "用户姓名", "联系电话", "竣工验收"]
+        .iter()
+        .filter(|label| text.contains(**label))
+        .count()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_docx_text;
+    use super::{extract_utf16le_text_runs, parse_docx_text};
     use chrono::NaiveDate;
 
     #[test]
@@ -351,5 +432,20 @@ mod tests {
 
         assert_eq!(data.acceptance_start, NaiveDate::from_ymd_opt(2026, 4, 16));
         assert_eq!(data.acceptance_end, NaiveDate::from_ymd_opt(2026, 4, 16));
+    }
+
+    #[test]
+    fn extracts_utf16le_text_runs_from_binary_doc_fallback() {
+        let text = "项目编号：BHE-24060165/01 项目全称 测试项目 用户姓名 张三 联系电话 13800000000 竣工验收 2026年01月02日 2026年01月05日";
+        let mut bytes = vec![0xD0, 0xCF, 0x11, 0xE0, 0, 1, 2, 3];
+        for unit in text.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        bytes.extend_from_slice(&[4, 5, 6, 7]);
+
+        let extracted = extract_utf16le_text_runs(&bytes);
+        assert!(extracted.contains("项目编号"));
+        assert!(extracted.contains("BHE-24060165/01"));
+        assert!(extracted.contains("联系电话"));
     }
 }

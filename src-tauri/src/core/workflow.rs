@@ -619,7 +619,7 @@ fn is_fatal_process_error(detail: &ProjectErrorDetail) -> bool {
     }
     matches!(
         detail.field_name.as_str(),
-        "文件识别" | "xlsx读取" | "doc读取" | "网页详情读取" | "验收报告读取"
+        "文件识别" | "xlsx读取" | "网页详情读取" | "验收报告读取"
     )
 }
 
@@ -1159,6 +1159,13 @@ mod tests {
         let details = vec![error_detail("验收报告读取", "AI 识别不可用")];
 
         assert!(fatal_abort_reason(&details).is_some());
+    }
+
+    #[test]
+    fn doc_read_errors_do_not_abort_batch_compare() {
+        let details = vec![error_detail("doc读取", "无法读取 .doc 文件")];
+
+        assert!(fatal_abort_reason(&details).is_none());
     }
 
     #[test]

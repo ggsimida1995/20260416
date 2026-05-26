@@ -1,6 +1,6 @@
 [package]
 name = "project-file-compare"
-version = "0.1.9"
+version = "0.1.10"
 description = "项目资料比对助手"
 authors = ["Project File Compare"]
 edition = "2021"
@@ -18,6 +18,7 @@ base64 = "0.22.1"
 calamine = { version = "0.31.0", features = ["chrono"] }
 chrono = { version = "0.4.42", features = ["serde"] }
 dirs = "6.0.0"
+encoding_rs = "0.8.35"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 keyring = { version = "3.6", features = ["apple-native", "windows-native"] }
 open = "5.3.3"
