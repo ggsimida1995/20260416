@@ -256,8 +256,8 @@ fn cookie_host_matches(cookie_host: &str, request_host: &str) -> bool {
 fn verify_session(client: &Client) -> Result<SessionIdentity> {
     let mut last_error = None;
     for attempt in 0..2 {
-        for (category_id, _) in AGGREGATION_CATEGORIES {
-            match verify_session_once(client, category_id) {
+        for (category_id, category_name) in AGGREGATION_CATEGORIES {
+            match verify_session_once(client, category_id, category_name) {
                 Ok(identity) => return Ok(identity),
                 Err(error) => last_error = Some(error),
             }
@@ -269,25 +269,14 @@ fn verify_session(client: &Client) -> Result<SessionIdentity> {
     Err(last_error.unwrap_or_else(|| anyhow!("会话检测失败")))
 }
 
-fn verify_session_once(client: &Client, category_id: &str) -> Result<SessionIdentity> {
+fn verify_session_once(
+    client: &Client,
+    category_id: &str,
+    category_name: &str,
+) -> Result<SessionIdentity> {
     let url = build_list_url(category_id, 1, TODO_PAGE_SIZE);
     let response = client.get(&url).send()?.error_for_status()?.text()?;
-    if looks_like_login_page(&response) {
-        bail!("Hollysys 会话已失效，请先在浏览器中重新登录");
-    }
-    let payload: Value = match serde_json::from_str(response.trim_start()) {
-        Ok(payload) => payload,
-        Err(error) => {
-            if let Some(identity) = fetch_identity_from_pages(client) {
-                return Ok(identity);
-            }
-            return Err(error)
-                .context("会话检测接口返回不是 JSON，已读取到 Cookie，但接口响应异常");
-        }
-    };
-    if json_contains_expired_signal(&payload) {
-        bail!("Hollysys 会话已失效，请先在浏览器中重新登录");
-    }
+    let payload = parse_todo_list_payload(&response, category_name)?;
     let mut identity = extract_identity_from_value(&payload).unwrap_or_default();
     if identity.account.is_empty() || identity.display_name.is_empty() {
         identity.merge(fetch_identity_from_pages(client));
@@ -364,12 +353,23 @@ fn fetch_todo_items_page(
         .send()?
         .error_for_status()?
         .text()?;
+    let payload = parse_todo_list_payload(&response, category_name)?;
+    Ok(parse_todo_list_page(&payload, category_name))
+}
+
+fn parse_todo_list_payload(response: &str, category_name: &str) -> Result<Value> {
     if looks_like_login_page(&response) {
         bail!("Hollysys 会话已失效，请先在浏览器中重新登录");
     }
     let payload: Value = serde_json::from_str(response.trim_start())
         .with_context(|| format!("待办列表返回不是 JSON，分类: {category_name}"))?;
-    Ok(parse_todo_list_page(&payload, category_name))
+    if json_contains_expired_signal(&payload) {
+        bail!("Hollysys 会话已失效，请先在浏览器中重新登录");
+    }
+    if !matches!(payload.get("datas"), Some(Value::Array(_))) {
+        bail!("待办列表未返回有效数据，分类: {category_name}，请重新登录后再试");
+    }
+    Ok(payload)
 }
 
 fn parse_todo_list_page(payload: &Value, category_name: &str) -> TodoListPage {
@@ -1028,15 +1028,31 @@ fn looks_like_login_page(content: &str) -> bool {
 
 fn json_contains_expired_signal(value: &Value) -> bool {
     match value {
-        Value::String(text) => looks_like_login_page(text),
+        Value::String(text) => looks_like_login_page(text) || looks_like_expired_session_text(text),
         Value::Array(items) => items.iter().any(json_contains_expired_signal),
-        Value::Object(map) => map.iter().any(|(key, item)| {
-            let lower_key = key.to_lowercase();
-            (lower_key.contains("login") || lower_key.contains("session"))
-                && item.as_str().map(looks_like_login_page).unwrap_or(false)
-        }),
+        Value::Object(map) => map.values().any(json_contains_expired_signal),
         _ => false,
     }
+}
+
+fn looks_like_expired_session_text(content: &str) -> bool {
+    let text = clean_whitespace(content).to_lowercase();
+    [
+        "请先登录",
+        "未登录",
+        "重新登录",
+        "登录超时",
+        "登录已超时",
+        "会话已失效",
+        "会话失效",
+        "login.jsp",
+        "session expired",
+        "session timeout",
+        "not logged in",
+        "login required",
+    ]
+    .iter()
+    .any(|signal| text.contains(signal))
 }
 
 #[cfg(test)]
@@ -1044,7 +1060,8 @@ mod tests {
     use super::{
         build_list_url, cookie_host_matches, extract_detail_field, extract_identity_from_text,
         extract_lui_user_name, extract_project_code, looks_like_login_page, normalize_project_code,
-        parse_todo_list_page, sanitize_filename, todo_pagination_complete, SessionIdentity,
+        parse_todo_list_page, parse_todo_list_payload, sanitize_filename, todo_pagination_complete,
+        SessionIdentity,
     };
     use serde_json::json;
 
@@ -1105,6 +1122,52 @@ mod tests {
         assert!(!looks_like_login_page(html));
         let identity = extract_identity_from_text(html).expect("identity from html");
         assert_eq!(identity.display_name, "冯雨翔");
+    }
+
+    #[test]
+    fn todo_list_payload_rejects_identity_html_without_json_datas() {
+        let html = r#"
+            <html>
+              <head><title>工作台（和利时）</title></head>
+              <body>
+                <div class="lui_user_img"><span class="info">冯雨翔</span></div>
+              </body>
+            </html>
+        "#;
+
+        let error = parse_todo_list_payload(html, "项目关闭工作流")
+            .expect_err("identity page must not confirm the todo API session")
+            .to_string();
+
+        assert!(error.contains("待办列表返回不是 JSON"));
+    }
+
+    #[test]
+    fn todo_list_payload_rejects_json_without_datas_array() {
+        let payload = json!({
+            "success": true,
+            "message": "ok"
+        });
+
+        let error = parse_todo_list_payload(&payload.to_string(), "项目关闭工作流")
+            .expect_err("todo API response must include datas")
+            .to_string();
+
+        assert!(error.contains("待办列表未返回有效数据"));
+    }
+
+    #[test]
+    fn todo_list_payload_rejects_expired_json_signal() {
+        let payload = json!({
+            "datas": [],
+            "message": "请先登录后再访问"
+        });
+
+        let error = parse_todo_list_payload(&payload.to_string(), "项目关闭工作流")
+            .expect_err("expired JSON must not confirm the session")
+            .to_string();
+
+        assert!(error.contains("会话已失效"));
     }
 
     #[test]
