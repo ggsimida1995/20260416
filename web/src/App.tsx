@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getVersion } from '@tauri-apps/api/app';
-import { check as checkUpdate } from '@tauri-apps/plugin-updater';
+import { check as checkUpdate, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { type ProjectCompareLog } from './components/CompareLogTable';
 import { SettingsModal, type Settings } from './components/SettingsModal';
@@ -65,6 +65,7 @@ type WorkflowProgress = {
   projectName: string;
   projectLog?: ProjectCompareLog | null;
 };
+type UpdateCheckOptions = { silent?: boolean };
 
 const emptySettings: Settings = {
   lastFileRoot: '',
@@ -139,6 +140,7 @@ export default function App() {
   const [settingsDraft, setSettingsDraft] = useState<Settings>(emptySettings);
   const [progress, setProgress] = useState<WorkflowProgress | null>(null);
   const [appVersion, setAppVersion] = useState<string>('');
+  const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   const [sessionRefreshing, setSessionRefreshing] = useState(false);
   const [updateChecking, setUpdateChecking] = useState(false);
   const [workflowElapsedMs, setWorkflowElapsedMs] = useState(0);
@@ -156,6 +158,8 @@ export default function App() {
   const loginCompletedRef = useRef(false);
   const workflowTimerRef = useRef<number | null>(null);
   const workflowStartedAtRef = useRef<number | null>(null);
+  const startupUpdateCheckedRef = useRef(false);
+  const updateCheckRunningRef = useRef(false);
   sessionStateRef.current = session.state;
 
   useEffect(() => {
@@ -174,6 +178,16 @@ export default function App() {
     getVersion()
       .then((v) => setAppVersion(v))
       .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime() || startupUpdateCheckedRef.current) {
+      return;
+    }
+    startupUpdateCheckedRef.current = true;
+    window.setTimeout(() => {
+      void checkForUpdate({ silent: true });
+    }, 1200);
   }, []);
 
   useEffect(() => {
@@ -707,74 +721,105 @@ export default function App() {
     await runPlainAction('打开中', '目录已打开', () => call<boolean>('open_path', { path: currentDownloadRoot() }), { log: false });
   }
 
-  async function checkForUpdate(): Promise<void> {
-    if (updateChecking) {
+  async function checkForUpdate(options: UpdateCheckOptions = {}): Promise<void> {
+    const silent = options.silent ?? false;
+    if (updateCheckRunningRef.current) {
       return;
     }
-    setUpdateChecking(true);
+    updateCheckRunningRef.current = true;
+    if (!silent) {
+      setUpdateChecking(true);
+    }
     try {
-      Message.loading({ id: 'updater', content: '正在检查更新…' });
+      if (!silent) {
+        Message.loading({ id: 'updater', content: '正在检查更新…' });
+      }
       const update = await checkUpdate();
+      setAvailableUpdate(update);
       if (!update) {
-        Message.success({ id: 'updater', content: '当前已是最新版本' });
+        if (!silent) {
+          Message.success({ id: 'updater', content: '当前已是最新版本' });
+        }
         return;
       }
-      Message.clear();
-      Modal.confirm({
-        title: '发现新版本',
-        content: (
-          <div>
-            <div style={{ marginBottom: 8 }}>
-              新版本：<b>v{update.version}</b>（当前 v{update.currentVersion}）
-            </div>
-            {update.body && (
-              <pre style={{
-                maxHeight: 240,
-                overflow: 'auto',
-                background: 'var(--color-fill-2)',
-                padding: 8,
-                borderRadius: 4,
-                fontSize: 12,
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word'
-              }}>{update.body}</pre>
-            )}
-            <div style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
-              点击「立即更新」后将自动下载并重启应用。
-            </div>
-          </div>
-        ),
-        okText: '立即更新',
-        cancelText: '稍后',
-        onOk: async () => {
-          try {
-            let downloaded = 0;
-            let contentLength = 0;
-            await update.downloadAndInstall((event) => {
-              if (event.event === 'Started') {
-                contentLength = event.data.contentLength ?? 0;
-                Message.loading({ id: 'updater', content: '开始下载更新…', duration: 0 });
-              } else if (event.event === 'Progress') {
-                downloaded += event.data.chunkLength;
-                const percent = contentLength > 0
-                  ? Math.floor((downloaded / contentLength) * 100)
-                  : 0;
-                Message.loading({ id: 'updater', content: `下载更新中 ${percent}%`, duration: 0 });
-              } else if (event.event === 'Finished') {
-                Message.success({ id: 'updater', content: '下载完成，即将重启…' });
-              }
-            });
-            await relaunch();
-          } catch (error) {
-            Message.error({ id: 'updater', content: `更新失败：${(error as Error).message || error}` });
-          }
-        }
-      });
+      if (silent) {
+        return;
+      }
+      showUpdateDialog(update);
     } catch (error) {
-      Message.error({ id: 'updater', content: `检查更新失败：${(error as Error).message || error}` });
+      if (!silent) {
+        Message.error({ id: 'updater', content: `检查更新失败：${(error as Error).message || error}` });
+      } else {
+        console.warn('[updater] silent check failed', error);
+      }
     } finally {
-      setUpdateChecking(false);
+      updateCheckRunningRef.current = false;
+      if (!silent) {
+        setUpdateChecking(false);
+      }
     }
+  }
+
+  function openUpdateAction(): void {
+    if (availableUpdate) {
+      showUpdateDialog(availableUpdate);
+      return;
+    }
+    void checkForUpdate();
+  }
+
+  function showUpdateDialog(update: Update): void {
+    Message.clear();
+    Modal.confirm({
+      title: '发现新版本',
+      content: (
+        <div>
+          <div style={{ marginBottom: 8 }}>
+            新版本：<b>v{update.version}</b>（当前 v{update.currentVersion}）
+          </div>
+          {update.body && (
+            <pre style={{
+              maxHeight: 240,
+              overflow: 'auto',
+              background: 'var(--color-fill-2)',
+              padding: 8,
+              borderRadius: 4,
+              fontSize: 12,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word'
+            }}>{update.body}</pre>
+          )}
+          <div style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
+            点击「立即更新」后将自动下载并重启应用。
+          </div>
+        </div>
+      ),
+      okText: '立即更新',
+      cancelText: '稍后',
+      onOk: async () => {
+        try {
+          let downloaded = 0;
+          let contentLength = 0;
+          await update.downloadAndInstall((event) => {
+            if (event.event === 'Started') {
+              contentLength = event.data.contentLength ?? 0;
+              Message.loading({ id: 'updater', content: '开始下载更新…', duration: 0 });
+            } else if (event.event === 'Progress') {
+              downloaded += event.data.chunkLength;
+              const percent = contentLength > 0
+                ? Math.floor((downloaded / contentLength) * 100)
+                : 0;
+              Message.loading({ id: 'updater', content: `下载更新中 ${percent}%`, duration: 0 });
+            } else if (event.event === 'Finished') {
+              Message.success({ id: 'updater', content: '下载完成，即将重启…' });
+            }
+          });
+          await relaunch();
+        } catch (error) {
+          Message.error({ id: 'updater', content: `更新失败：${(error as Error).message || error}` });
+        }
+      }
+    });
   }
 
   async function clearRuntimeLogs(): Promise<void> {
@@ -828,8 +873,9 @@ export default function App() {
           onExportSuccess={() => void exportSuccess()}
           onExportError={() => void exportError()}
           appVersion={appVersion}
+          availableUpdateVersion={availableUpdate?.version || ''}
           updateChecking={updateChecking}
-          onCheckUpdate={() => void checkForUpdate()}
+          onCheckUpdate={openUpdateAction}
         />
 
         <WorkspacePanel

@@ -156,6 +156,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   padding: 6px 16px;
   border-top: 1px solid var(--color-border-2);
   background-color: var(--color-bg-2);
@@ -164,11 +165,27 @@ body {
 }
 
 .console-footer-version {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  letter-spacing: 0.02em;
+}
+
+.console-footer-new-version {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border: 1px solid rgba(245, 99, 39, 0.28);
+  border-radius: 4px;
+  background: rgba(245, 99, 39, 0.1);
+  color: rgb(var(--orange-6));
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 16px;
 }
 
 .console-footer-update {
+  flex-shrink: 0;
   font-size: 12px !important;
   padding: 0 4px !important;
   height: 22px !important;

@@ -59,6 +59,7 @@ type Props = {
   onExportSuccess: () => void;
   onExportError: () => void;
   appVersion: string;
+  availableUpdateVersion: string;
   updateChecking: boolean;
   onCheckUpdate: () => void;
 };
@@ -84,6 +85,7 @@ export function ConsoleSidebar({
   onExportSuccess,
   onExportError,
   appVersion,
+  availableUpdateVersion,
   updateChecking,
   onCheckUpdate
 }: Props) {
@@ -258,7 +260,12 @@ export function ConsoleSidebar({
       </Card>
 
       <div className="console-footer">
-        <span className="console-footer-version">{appVersion ? `v${appVersion}` : ''}</span>
+        <span className="console-footer-version">
+          <span>{appVersion ? `v${appVersion}` : ''}</span>
+          {availableUpdateVersion && (
+            <span className="console-footer-new-version">新版本 v{availableUpdateVersion}</span>
+          )}
+        </span>
         <Button
           className="console-footer-update"
           size="mini"
@@ -267,7 +274,7 @@ export function ConsoleSidebar({
           loading={updateChecking}
           onClick={onCheckUpdate}
         >
-          检查更新
+          {availableUpdateVersion ? '立即更新' : '检查更新'}
         </Button>
       </div>
     </Layout.Sider>
