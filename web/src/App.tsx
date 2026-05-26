@@ -134,6 +134,7 @@ export default function App() {
   const [appVersion, setAppVersion] = useState<string>('');
   const [sessionRefreshing, setSessionRefreshing] = useState(false);
   const [updateChecking, setUpdateChecking] = useState(false);
+  const [workflowElapsedMs, setWorkflowElapsedMs] = useState(0);
 
   const settings = state?.settings ?? emptySettings;
   const outputs = state?.outputs ?? emptyOutputs;
@@ -145,6 +146,8 @@ export default function App() {
   const loginPollTimerRef = useRef<number | null>(null);
   const loginPollRunningRef = useRef(false);
   const loginCompletedRef = useRef(false);
+  const workflowTimerRef = useRef<number | null>(null);
+  const workflowStartedAtRef = useRef<number | null>(null);
   sessionStateRef.current = session.state;
 
   useEffect(() => {
@@ -153,6 +156,10 @@ export default function App() {
 
   useEffect(() => {
     return () => stopLoginSessionPolling();
+  }, []);
+
+  useEffect(() => {
+    return () => stopWorkflowTimer(false);
   }, []);
 
   useEffect(() => {
@@ -314,6 +321,9 @@ export default function App() {
     }
     setBusy({ active: true, text: runningText });
     setProgress(showProgress ? defaultProgressFor(runningText) : null);
+    if (showProgress) {
+      startWorkflowTimer();
+    }
     if (shouldLog) {
       appendUiLog(runningText);
     }
@@ -338,12 +348,38 @@ export default function App() {
         showError(error);
       }
     } finally {
+      if (showProgress) {
+        stopWorkflowTimer();
+      }
       setBusy({ active: false, text: '' });
       if (showProgress) {
         window.setTimeout(() => {
           setProgress((current) => current?.status === 'running' ? current : null);
         }, 1600);
       }
+    }
+  }
+
+  function startWorkflowTimer(): void {
+    stopWorkflowTimer();
+    const startedAt = Date.now();
+    workflowStartedAtRef.current = startedAt;
+    setWorkflowElapsedMs(0);
+    workflowTimerRef.current = window.setInterval(() => {
+      setWorkflowElapsedMs(Date.now() - startedAt);
+    }, 1000);
+  }
+
+  function stopWorkflowTimer(updateElapsed = true): void {
+    if (workflowTimerRef.current !== null) {
+      window.clearInterval(workflowTimerRef.current);
+      workflowTimerRef.current = null;
+    }
+    if (workflowStartedAtRef.current !== null) {
+      if (updateElapsed) {
+        setWorkflowElapsedMs(Date.now() - workflowStartedAtRef.current);
+      }
+      workflowStartedAtRef.current = null;
     }
   }
 
@@ -709,6 +745,7 @@ export default function App() {
           busyText={busy.text}
           logs={logs}
           progress={progress}
+          workflowElapsedMs={workflowElapsedMs}
           onOpenSettings={openSettings}
           onRunBatch={() => void runBatch()}
           onRunDownload={() => void runDownload()}
@@ -749,7 +786,7 @@ function defaultProgressFor(text: string): WorkflowProgress | null {
     current: 0,
     total: 0,
     percent: text === '比对中' || text === '批处理中' ? 0 : 20,
-    message: text,
+    message: '',
     projectName: '',
     projectLog: null
   };

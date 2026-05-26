@@ -39,6 +39,7 @@ type Props = {
   busyText: string;
   logs: string[];
   progress: WorkflowProgress | null;
+  workflowElapsedMs: number;
   onOpenSettings: () => void;
   onRunBatch: () => void;
   onRunDownload: () => void;
@@ -56,6 +57,7 @@ export function WorkspacePanel({
   busyText,
   logs,
   progress,
+  workflowElapsedMs,
   onOpenSettings,
   onRunBatch,
   onRunDownload,
@@ -98,6 +100,9 @@ export function WorkspacePanel({
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ block: 'nearest' });
   }, [filteredLogs.length]);
+
+  const progressMessage = progress ? visibleProgressMessage(progress, busyText) : '';
+  const progressCountLabel = progress ? progressStatusLabel(progress) : '';
 
   return (
     <Layout.Content className={`workspace-deck ${progress ? 'has-progress' : 'no-progress'}`}>
@@ -183,12 +188,15 @@ export function WorkspacePanel({
               <div className="progress-head">
                 <div className="progress-title">
                   <span>{progress.stage || busyText || '执行中'}</span>
-                  <Tag color={progress.status === 'error' ? 'red' : progress.status === 'done' ? 'green' : 'arcoblue'} style={{ marginLeft: 8 }}>
-                    {progress.total > 0 ? `${progress.current}/${progress.total}` : '处理中'}
-                  </Tag>
+                  {progressCountLabel && (
+                    <Tag color={progress.status === 'error' ? 'red' : progress.status === 'done' ? 'green' : 'arcoblue'} style={{ marginLeft: 8 }}>
+                      {progressCountLabel}
+                    </Tag>
+                  )}
                 </div>
-                <Space>
-                  <span className="progress-message">{progress.message}</span>
+                <Space className="progress-meta">
+                  {progressMessage && <span className="progress-message">{progressMessage}</span>}
+                  <span className="progress-elapsed">运行 {formatElapsedTime(workflowElapsedMs)}</span>
                   {progress.status === 'running' && (
                     <Button size="mini" status="danger" onClick={onCancelWorkflow}>
                       取消
@@ -259,4 +267,43 @@ export function WorkspacePanel({
       </Card>
     </Layout.Content>
   );
+}
+
+function progressStatusLabel(progress: WorkflowProgress): string {
+  if (progress.total > 0) {
+    return `${progress.current}/${progress.total}`;
+  }
+  if (progress.status === 'done') {
+    return '完成';
+  }
+  if (progress.status === 'error') {
+    return '失败';
+  }
+  return '';
+}
+
+function visibleProgressMessage(progress: WorkflowProgress, busyText: string): string {
+  const message = progress.message.trim();
+  if (!message) {
+    return '';
+  }
+  const stage = progress.stage.trim();
+  const compactMessage = message.replace(/\s+/g, '');
+  const hidden = [busyText, stage, `${stage}中`, '处理中']
+    .filter(Boolean)
+    .map((item) => item.replace(/\s+/g, ''));
+  return hidden.includes(compactMessage) ? '' : message;
+}
+
+function formatElapsedTime(elapsedMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const mm = String(minutes).padStart(2, '0');
+  const ss = String(seconds).padStart(2, '0');
+  if (hours > 0) {
+    return `${hours}:${mm}:${ss}`;
+  }
+  return `${mm}:${ss}`;
 }

@@ -269,6 +269,42 @@ body {
   gap: 6px;
 }
 
+.progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.progress-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  font-weight: 600;
+  color: var(--color-text-1);
+}
+
+.progress-meta {
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.progress-message {
+  max-width: 420px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-2);
+}
+
+.progress-elapsed {
+  color: var(--color-text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* 日志区段：占满 workspace-card 剩余高度 */
 .log-explorer-section {
   flex: 1;
