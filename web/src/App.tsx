@@ -267,6 +267,43 @@ export default function App() {
     if (!isTauriRuntime()) {
       return () => undefined;
     }
+    let unlisten: UnlistenFn | null = null;
+    let mounted = true;
+    void listen('auth://login-window-closed', () => {
+      if (!mounted || loginPollTimerRef.current === null || loginCompletedRef.current) {
+        return;
+      }
+      stopLoginSessionPolling();
+      setSessionRefreshing(false);
+      setState((previous) => previous ? {
+        ...previous,
+        session: {
+          ...previous.session,
+          state: 'missing',
+          message: '登录窗口已关闭，未完成登录',
+          account: '',
+          displayName: '',
+          checkedAt: new Date().toLocaleString('zh-CN', { hour12: false })
+        }
+      } : previous);
+      void refreshSession(false);
+    }).then((handler) => {
+      if (mounted) {
+        unlisten = handler;
+      } else {
+        handler();
+      }
+    });
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return () => undefined;
+    }
     const id = window.setInterval(async () => {
       if (sessionStateRef.current !== 'ok') return;
       try {
@@ -497,10 +534,10 @@ export default function App() {
         await completeLoginSession(nextSession);
         return;
       }
+      setState((previous) => previous ? { ...previous, session: nextSession } : previous);
       if (Date.now() >= deadline) {
         stopLoginSessionPolling();
         setSessionRefreshing(false);
-        setState((previous) => previous ? { ...previous, session: nextSession } : previous);
         Message.warning('暂未检测到网页登录成功，完成登录后可点击刷新会话');
       }
     } catch {

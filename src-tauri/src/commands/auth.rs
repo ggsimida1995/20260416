@@ -10,6 +10,7 @@ const HOLLYSYS_HOST: &str = "www.hollysys.net";
 const HOLLYSYS_TODO_PREVIEW_URL: &str = "https://www.hollysys.net/sys/notify/sys_notify_todo/sysNotifyMainIndex.do?method=list&from=aggregation&dataType=todo&fdType=13&aggregationId=18a032b3695468f23f38a0f40d5a3602&pageno=1&rowsize=100&pageNo=1&rowSize=100&pageSize=100";
 const AUTH_COOKIES_UPDATED_EVENT: &str = "auth://cookies-updated";
 const AUTH_LOGIN_PAGE_DETECTED_EVENT: &str = "auth://login-page-detected";
+const AUTH_LOGIN_WINDOW_CLOSED_EVENT: &str = "auth://login-window-closed";
 
 #[cfg(target_os = "windows")]
 const LOGIN_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36";
@@ -73,9 +74,11 @@ pub async fn open_login_window(app: AppHandle) -> Result<(), String> {
                 .build()
                 .map_err(to_string)?;
         let login_window_for_close = login_window.clone();
+        let app_handle_for_close = app.clone();
         login_window.on_window_event(move |event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
+                let _ = app_handle_for_close.emit(AUTH_LOGIN_WINDOW_CLOSED_EVENT, ());
                 let _ = login_window_for_close.destroy();
             }
         });
