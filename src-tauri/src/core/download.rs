@@ -217,7 +217,7 @@ pub fn build_authenticated_client_from_stored_cookies(timeout_seconds: u64) -> R
     let store = AppStateStore::new(app_state_db_path());
     let cookies = store.load_cookies()?;
     if cookies.is_empty() {
-        bail!("尚未登录，请点击侧栏的「登录系统」按钮");
+        bail!("尚未登录，请点击侧栏登录图标");
     }
     let mut cookie_pairs = Vec::new();
     let mut seen = HashSet::new();

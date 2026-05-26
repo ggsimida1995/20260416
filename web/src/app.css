@@ -136,6 +136,12 @@ body {
   color: var(--color-text-1);
 }
 
+.session-icon-button {
+  width: 24px !important;
+  min-width: 24px !important;
+  padding: 0 !important;
+}
+
 /* Sider 折叠时隐藏内容，仅留触发条 */
 .console-deck.arco-layout-sider-collapsed .console-card {
   display: none;

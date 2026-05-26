@@ -106,6 +106,13 @@ function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__);
 }
 
+function isWindowsClient(): boolean {
+  if (typeof navigator === 'undefined') {
+    return false;
+  }
+  return /Windows/i.test(navigator.userAgent) || /^Win/i.test(navigator.platform);
+}
+
 function previewState(): AppState {
   return {
     windowTitle: '项目资料比对助手',
@@ -142,6 +149,7 @@ export default function App() {
   const isBusy = busy.active;
   const isSaving = busy.active && busy.text === '保存中';
   const isSessionReady = session.state === 'ok';
+  const showSessionPreview = !isWindowsClient();
   const sessionStateRef = useRef<string>(session.state);
   const loginPollTimerRef = useRef<number | null>(null);
   const loginPollRunningRef = useRef(false);
@@ -399,6 +407,14 @@ export default function App() {
       await call<void>('open_login_window');
       startLoginSessionPolling();
       Message.info('登录窗口已打开，登录完成后会自动同步会话');
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  async function openSessionPreviewWindow(): Promise<void> {
+    try {
+      await call<void>('open_session_preview_window');
     } catch (error) {
       showError(error);
     }
@@ -726,6 +742,8 @@ export default function App() {
           isSessionReady={isSessionReady}
           sessionRefreshing={sessionRefreshing}
           onRefreshSession={() => void refreshSession()}
+          showSessionPreview={showSessionPreview}
+          onOpenSessionPreview={() => void openSessionPreviewWindow()}
           onOpenLogin={() => void openLoginWindow()}
           onLogout={() => void logout()}
           fileRoot={currentFileRoot()}

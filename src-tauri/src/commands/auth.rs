@@ -1,9 +1,10 @@
 use crate::core::config::app_state_db_path;
 use crate::db::app_state::{AppStateStore, CookieEntry};
-use tauri::webview::PageLoadEvent;
+use tauri::webview::{Cookie, PageLoadEvent};
 use tauri::{AppHandle, Emitter, Manager, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 const LOGIN_WINDOW_LABEL: &str = "login";
+const PREVIEW_WINDOW_LABEL: &str = "session-preview";
 const HOLLYSYS_URL: &str = "https://www.hollysys.net/";
 const HOLLYSYS_HOST: &str = "www.hollysys.net";
 
@@ -24,59 +25,112 @@ pub async fn open_login_window(app: AppHandle) -> Result<(), String> {
 
     #[cfg(not(target_os = "windows"))]
     {
-    if let Some(existing) = app.get_webview_window(LOGIN_WINDOW_LABEL) {
+        if let Some(existing) = app.get_webview_window(LOGIN_WINDOW_LABEL) {
+            existing.show().map_err(to_string)?;
+            existing.set_focus().map_err(to_string)?;
+            return Ok(());
+        }
+
+        let settings = crate::commands::state::load_settings().map_err(|e| e.to_string())?;
+        let autofill_script = if !settings.account.is_empty() || !settings.password.is_empty() {
+            Some(build_autofill_script(&settings.account, &settings.password))
+        } else {
+            None
+        };
+
+        let login_url: Url = HOLLYSYS_URL.parse().map_err(to_string)?;
+        let app_handle = app.clone();
+        let login_window =
+            WebviewWindowBuilder::new(&app, LOGIN_WINDOW_LABEL, WebviewUrl::External(login_url))
+                .title("登录账号")
+                .inner_size(1024.0, 720.0)
+                .min_inner_size(800.0, 600.0)
+                .resizable(true)
+                .closable(true)
+                .focused(true)
+                .center()
+                .user_agent(LOGIN_USER_AGENT)
+                .on_page_load(move |window, payload| {
+                    if payload.event() != PageLoadEvent::Finished {
+                        return;
+                    }
+                    if let Some(script) = autofill_script.as_ref() {
+                        let _ = window.eval(script);
+                    }
+                    if let Err(error) = capture_cookies(&window) {
+                        eprintln!("[auth] capture cookies failed: {error}");
+                        return;
+                    }
+                    let _ = app_handle.emit("auth://cookies-updated", ());
+                })
+                .build()
+                .map_err(to_string)?;
+        let login_window_for_close = login_window.clone();
+        login_window.on_window_event(move |event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = login_window_for_close.destroy();
+            }
+        });
+
+        Ok(())
+    }
+}
+
+#[tauri::command]
+pub async fn open_session_preview_window(app: AppHandle) -> Result<(), String> {
+    let preview_url: Url = HOLLYSYS_URL.parse().map_err(to_string)?;
+    if let Some(existing) = app.get_webview_window(PREVIEW_WINDOW_LABEL) {
+        apply_stored_cookies(&existing)?;
+        existing.navigate(preview_url).map_err(to_string)?;
         existing.show().map_err(to_string)?;
         existing.set_focus().map_err(to_string)?;
         return Ok(());
     }
 
-    let settings = crate::commands::state::load_settings().map_err(|e| e.to_string())?;
-    let autofill_script = if !settings.account.is_empty() || !settings.password.is_empty() {
-        Some(build_autofill_script(&settings.account, &settings.password))
-    } else {
-        None
-    };
-
-    let login_url: Url = HOLLYSYS_URL.parse().map_err(to_string)?;
+    let blank_url: Url = "about:blank".parse().map_err(to_string)?;
     let app_handle = app.clone();
-    let login_window = WebviewWindowBuilder::new(
-        &app,
-        LOGIN_WINDOW_LABEL,
-        WebviewUrl::External(login_url),
-    )
-    .title("登录账号")
-    .inner_size(1024.0, 720.0)
-    .min_inner_size(800.0, 600.0)
-    .resizable(true)
-    .closable(true)
-    .focused(true)
-    .center()
-    .user_agent(LOGIN_USER_AGENT)
-    .on_page_load(move |window, payload| {
-        if payload.event() != PageLoadEvent::Finished {
-            return;
-        }
-        if let Some(script) = autofill_script.as_ref() {
-            let _ = window.eval(script);
-        }
-        if let Err(error) = capture_cookies(&window) {
-            eprintln!("[auth] capture cookies failed: {error}");
-            return;
-        }
-        let _ = app_handle.emit("auth://cookies-updated", ());
-    })
-    .build()
-    .map_err(to_string)?;
-    let login_window_for_close = login_window.clone();
-    login_window.on_window_event(move |event| {
+    let preview_window =
+        WebviewWindowBuilder::new(&app, PREVIEW_WINDOW_LABEL, WebviewUrl::External(blank_url))
+            .title("已登录网站预览")
+            .inner_size(1280.0, 820.0)
+            .min_inner_size(960.0, 640.0)
+            .resizable(true)
+            .closable(true)
+            .focused(true)
+            .center()
+            .user_agent(LOGIN_USER_AGENT)
+            .on_page_load(move |window, payload| {
+                if payload.event() != PageLoadEvent::Finished {
+                    return;
+                }
+                if let Err(error) = capture_cookies(&window) {
+                    eprintln!("[auth] preview capture cookies failed: {error}");
+                    return;
+                }
+                let _ = app_handle.emit("auth://cookies-updated", ());
+            })
+            .build()
+            .map_err(to_string)?;
+
+    if let Err(error) = apply_stored_cookies(&preview_window) {
+        let _ = preview_window.destroy();
+        return Err(error);
+    }
+    if let Err(error) = preview_window.navigate(preview_url).map_err(to_string) {
+        let _ = preview_window.destroy();
+        return Err(error);
+    }
+
+    let preview_window_for_close = preview_window.clone();
+    preview_window.on_window_event(move |event| {
         if let WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
-            let _ = login_window_for_close.destroy();
+            let _ = preview_window_for_close.destroy();
         }
     });
 
     Ok(())
-    }
 }
 
 fn build_autofill_script(account: &str, password: &str) -> String {
@@ -135,6 +189,42 @@ pub fn clear_login() -> Result<(), String> {
     Ok(())
 }
 
+fn apply_stored_cookies(window: &tauri::WebviewWindow) -> Result<(), String> {
+    let cookies = AppStateStore::new(app_state_db_path())
+        .load_cookies()
+        .map_err(to_string)?;
+    if cookies.is_empty() {
+        return Err("还没有可预览的登录 Cookie，请先登录并刷新会话".to_string());
+    }
+
+    let mut applied = 0usize;
+    for entry in cookies {
+        if entry.name.is_empty()
+            || entry.value.is_empty()
+            || !cookie_domain_matches(&entry.domain, HOLLYSYS_HOST)
+        {
+            continue;
+        }
+        let path = if entry.path.is_empty() {
+            "/".to_string()
+        } else {
+            entry.path
+        };
+        let cookie = Cookie::build((entry.name, entry.value))
+            .domain(entry.domain)
+            .path(path)
+            .secure(true)
+            .build();
+        window.set_cookie(cookie).map_err(to_string)?;
+        applied += 1;
+    }
+
+    if applied == 0 {
+        return Err("已保存的 Cookie 不匹配 Hollysys，请重新登录后再预览".to_string());
+    }
+    Ok(())
+}
+
 fn capture_cookies(window: &tauri::WebviewWindow) -> Result<(), String> {
     let cookies = window.cookies().map_err(to_string)?;
     let total = cookies.len();
@@ -153,7 +243,10 @@ fn capture_cookies(window: &tauri::WebviewWindow) -> Result<(), String> {
                 name: name.to_string(),
                 value: c.value().to_string(),
                 domain: domain.to_string(),
-                path: c.path().map(|p| p.to_string()).unwrap_or_else(|| "/".to_string()),
+                path: c
+                    .path()
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "/".to_string()),
             })
         })
         .collect();

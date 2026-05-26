@@ -7,16 +7,20 @@ import {
   Layout,
   Space,
   Spin,
-  Statistic
+  Statistic,
+  Tooltip
 } from '@arco-design/web-react';
 import {
+  IconEye,
   IconExport,
   IconFolder,
   IconInfoCircle,
   IconLeft,
+  IconPoweroff,
   IconRefresh,
   IconRight,
-  IconSync
+  IconSync,
+  IconUser
 } from '@arco-design/web-react/icon';
 
 type SessionStatus = {
@@ -42,6 +46,8 @@ type Props = {
   isSessionReady: boolean;
   sessionRefreshing: boolean;
   onRefreshSession: () => void;
+  showSessionPreview: boolean;
+  onOpenSessionPreview: () => void;
   onOpenLogin: () => void;
   onLogout: () => void;
   fileRoot: string;
@@ -65,6 +71,8 @@ export function ConsoleSidebar({
   isSessionReady,
   sessionRefreshing,
   onRefreshSession,
+  showSessionPreview,
+  onOpenSessionPreview,
   onOpenLogin,
   onLogout,
   fileRoot,
@@ -103,33 +111,58 @@ export function ConsoleSidebar({
           <div className="console-section-head">
             <span className="console-section-title">会话状态</span>
             <Space size={4}>
-              <Button
-                size="mini"
-                type="text"
-                icon={<IconRefresh />}
-                loading={sessionRefreshing}
-                onClick={onRefreshSession}
-              >
-                刷新
-              </Button>
-              <Button
-                size="mini"
-                type="text"
-                disabled={sessionRefreshing || session.state === 'checking'}
-                onClick={onOpenLogin}
-              >
-                {isSessionReady ? '重新登录' : '登录系统'}
-              </Button>
-              {isSessionReady && (
+              <Tooltip content="刷新会话">
                 <Button
+                  className="session-icon-button"
                   size="mini"
                   type="text"
-                  status="danger"
-                  disabled={sessionRefreshing}
-                  onClick={onLogout}
-                >
-                  退出
-                </Button>
+                  icon={<IconRefresh />}
+                  loading={sessionRefreshing}
+                  title="刷新会话"
+                  aria-label="刷新会话"
+                  onClick={onRefreshSession}
+                />
+              </Tooltip>
+              {showSessionPreview && (
+                <Tooltip content="预览已登录网站">
+                  <Button
+                    className="session-icon-button"
+                    size="mini"
+                    type="text"
+                    icon={<IconEye />}
+                    disabled={!isSessionReady || sessionRefreshing || session.state === 'checking'}
+                    title="预览已登录网站"
+                    aria-label="预览已登录网站"
+                    onClick={onOpenSessionPreview}
+                  />
+                </Tooltip>
+              )}
+              <Tooltip content={isSessionReady ? '重新登录' : '登录系统'}>
+                <Button
+                  className="session-icon-button"
+                  size="mini"
+                  type="text"
+                  icon={<IconUser />}
+                  disabled={sessionRefreshing || session.state === 'checking'}
+                  title={isSessionReady ? '重新登录' : '登录系统'}
+                  aria-label={isSessionReady ? '重新登录' : '登录系统'}
+                  onClick={onOpenLogin}
+                />
+              </Tooltip>
+              {isSessionReady && (
+                <Tooltip content="退出登录">
+                  <Button
+                    className="session-icon-button"
+                    size="mini"
+                    type="text"
+                    status="danger"
+                    icon={<IconPoweroff />}
+                    disabled={sessionRefreshing}
+                    title="退出登录"
+                    aria-label="退出登录"
+                    onClick={onLogout}
+                  />
+                </Tooltip>
               )}
             </Space>
           </div>
@@ -138,7 +171,7 @@ export function ConsoleSidebar({
               type={session.state === 'ok' ? 'success' : (session.state === 'checking' ? 'info' : 'warning')}
               showIcon
               title={session.state === 'ok' ? '和利时系统联通正常' : (session.state === 'checking' ? '检测中...' : '会话失效/未登录')}
-              content={session.state === 'ok' ? `${session.displayName || session.account}已成功同步` : session.message || '点击右上「登录系统」按钮在内置窗口完成登录'}
+              content={session.state === 'ok' ? `${session.displayName || session.account}已成功同步` : session.message || '点击右上登录图标完成登录'}
             />
             {isSessionReady && (
               <Descriptions

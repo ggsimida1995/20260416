@@ -19,6 +19,7 @@ pub fn run() {
             commands::state::choose_file_root,
             commands::state::check_session,
             commands::auth::open_login_window,
+            commands::auth::open_session_preview_window,
             commands::auth::close_login_window,
             commands::auth::has_stored_cookies,
             commands::auth::clear_login,
