@@ -11,7 +11,7 @@ use crate::core::models::{
     WorkflowSummary,
 };
 use crate::core::normalizers::{normalize_date_value, normalize_phone, normalize_text};
-use crate::db::app_state::{timestamp, AppStateStore, SuccessRecord};
+use crate::db::app_state::{timestamp, AppStateStore, CompareRunRecord, SuccessRecord};
 use crate::readers::docx::read_docx;
 use crate::readers::excel::read_close_sheet;
 use crate::readers::pdf::{pdf_file_fingerprint, read_pdf};
@@ -97,6 +97,20 @@ where
             ));
         },
     )?;
+
+    let compare_records = results
+        .iter()
+        .map(|result| {
+            Ok(CompareRunRecord {
+                order: result.order,
+                project_code: result.log.project_code.clone(),
+                project_name: result.project_name.clone(),
+                passed: result.log.passed,
+                log_json: serde_json::to_string(&result.log)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    store.save_compare_run(&compare_run_id(), total, &compare_records)?;
 
     let mut success_codes = Vec::new();
     let mut error_details = Vec::new();
@@ -233,6 +247,10 @@ where
 
 fn compare_worker_count(total: usize) -> usize {
     total.clamp(1, MAX_COMPARE_WORKERS)
+}
+
+fn compare_run_id() -> String {
+    Local::now().format("%Y%m%d%H%M%S%3f").to_string()
 }
 
 fn compare_one_project(
@@ -981,18 +999,10 @@ pub fn summary(workspace_root: &Path, mode: &str) -> Result<WorkflowSummary> {
         mode: mode.to_string(),
         updated_at: timestamp(),
         pending_success_count: store.count_pending_success_records()?,
-        failed_count: count_failed_project_logs(&store)?,
+        failed_count: store.count_latest_failed_compare_results()?,
         project_count: project_dir_names(&file_root).len(),
         downloaded_project_names: project_dir_names(&file_root),
     })
-}
-
-fn count_failed_project_logs(store: &AppStateStore) -> Result<usize> {
-    Ok(store
-        .latest_runtime_logs(10_000)?
-        .into_iter()
-        .filter(|line| line.contains("[项目比对]") && line.contains("\"passed\":false"))
-        .count())
 }
 
 fn read_error(project_code: &str, field_name: &str, error: anyhow::Error) -> ProjectErrorDetail {

@@ -224,6 +224,10 @@ export function ConsoleSidebar({
           </div>
           <div className="stats-grid">
             <div className="stat-row">
+              <Statistic title="当前项目数" value={outputs.projectCount} precision={0} suffix="个" groupSeparator />
+              <IconInfoCircle style={{ color: 'var(--color-text-3)', fontSize: 16 }} />
+            </div>
+            <div className="stat-row">
               <Statistic title="待导出成功项" value={outputs.pendingSuccessCount} precision={0} suffix="项" groupSeparator />
               <Button
                 size="mini"
@@ -237,7 +241,7 @@ export function ConsoleSidebar({
               </Button>
             </div>
             <div className="stat-row">
-              <Statistic title="比对异常数" value={outputs.failedCount} precision={0} suffix="个" groupSeparator />
+              <Statistic title="最近比对异常数" value={outputs.failedCount} precision={0} suffix="个" groupSeparator />
               <Button
                 size="mini"
                 status="danger"
@@ -248,10 +252,6 @@ export function ConsoleSidebar({
               >
                 导出异常
               </Button>
-            </div>
-            <div className="stat-row">
-              <Statistic title="已处理项目数" value={outputs.projectCount} precision={0} suffix="个" groupSeparator />
-              <IconInfoCircle style={{ color: 'var(--color-text-3)', fontSize: 16 }} />
             </div>
           </div>
         </div>

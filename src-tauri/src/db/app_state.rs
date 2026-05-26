@@ -17,6 +17,15 @@ pub struct SuccessRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompareRunRecord {
+    pub order: usize,
+    pub project_code: String,
+    pub project_name: String,
+    pub passed: bool,
+    pub log_json: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CookieEntry {
     pub name: String,
     pub value: String,
@@ -79,6 +88,76 @@ impl AppStateStore {
         let connection = self.connect()?;
         connection.execute("DELETE FROM runtime_logs", [])?;
         Ok(())
+    }
+
+    pub fn save_compare_run(
+        &self,
+        run_id: &str,
+        total_count: usize,
+        records: &[CompareRunRecord],
+    ) -> Result<()> {
+        let mut connection = self.connect()?;
+        let tx = connection.transaction()?;
+        let now = timestamp();
+        tx.execute(
+            "INSERT INTO compare_runs(id, total_count, created_at) VALUES (?1, ?2, ?3)",
+            params![run_id, total_count as i64, now],
+        )?;
+        for record in records {
+            tx.execute(
+                "INSERT INTO compare_results(run_id, item_order, project_code, project_name, passed, log_json, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    run_id,
+                    record.order as i64,
+                    record.project_code,
+                    record.project_name,
+                    if record.passed { 1 } else { 0 },
+                    record.log_json,
+                    now
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn count_latest_failed_compare_results(&self) -> Result<usize> {
+        let Some(run_id) = self.latest_compare_run_id()? else {
+            return Ok(0);
+        };
+        let connection = self.connect()?;
+        let count: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM compare_results WHERE run_id = ?1 AND passed = 0",
+            params![run_id],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    pub fn latest_failed_compare_logs(&self) -> Result<Vec<String>> {
+        let Some(run_id) = self.latest_compare_run_id()? else {
+            return Ok(Vec::new());
+        };
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT log_json FROM compare_results
+             WHERE run_id = ?1 AND passed = 0
+             ORDER BY item_order ASC, id ASC",
+        )?;
+        let rows = statement.query_map(params![run_id], |row| row.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    fn latest_compare_run_id(&self) -> Result<Option<String>> {
+        let connection = self.connect()?;
+        let mut statement =
+            connection.prepare("SELECT id FROM compare_runs ORDER BY id DESC LIMIT 1")?;
+        let mut rows = statement.query([])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(row.get(0)?))
     }
 
     pub fn append_success_record(&self, record: &SuccessRecord) -> Result<()> {
@@ -270,6 +349,23 @@ impl AppStateStore {
               updated_at TEXT NOT NULL,
               exported_at TEXT
             );
+            CREATE TABLE IF NOT EXISTS compare_runs (
+              id TEXT PRIMARY KEY,
+              total_count INTEGER NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS compare_results (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              run_id TEXT NOT NULL,
+              item_order INTEGER NOT NULL,
+              project_code TEXT NOT NULL,
+              project_name TEXT NOT NULL,
+              passed INTEGER NOT NULL,
+              log_json TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_compare_results_run_passed
+              ON compare_results(run_id, passed, item_order);
             CREATE TABLE IF NOT EXISTS pdf_recognition_cache (
               file_path TEXT PRIMARY KEY,
               fingerprint TEXT NOT NULL,
@@ -292,4 +388,63 @@ impl AppStateStore {
 
 pub fn timestamp() -> String {
     Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppStateStore, CompareRunRecord};
+
+    #[test]
+    fn latest_compare_run_counts_and_exports_only_latest_failures() {
+        let path = std::env::temp_dir().join(format!(
+            "project-file-compare-state-test-{}-{}.sqlite",
+            std::process::id(),
+            chrono::Local::now().timestamp_millis()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let store = AppStateStore::new(path.clone());
+
+        store
+            .save_compare_run(
+                "20260101000000000",
+                2,
+                &[
+                    CompareRunRecord {
+                        order: 0,
+                        project_code: "OLD-1".to_string(),
+                        project_name: "旧失败".to_string(),
+                        passed: false,
+                        log_json: "{\"projectCode\":\"OLD-1\",\"passed\":false}".to_string(),
+                    },
+                    CompareRunRecord {
+                        order: 1,
+                        project_code: "OLD-2".to_string(),
+                        project_name: "旧成功".to_string(),
+                        passed: true,
+                        log_json: "{\"projectCode\":\"OLD-2\",\"passed\":true}".to_string(),
+                    },
+                ],
+            )
+            .unwrap();
+        store
+            .save_compare_run(
+                "20260101000001000",
+                2,
+                &[CompareRunRecord {
+                    order: 0,
+                    project_code: "NEW-1".to_string(),
+                    project_name: "新失败".to_string(),
+                    passed: false,
+                    log_json: "{\"projectCode\":\"NEW-1\",\"passed\":false}".to_string(),
+                }],
+            )
+            .unwrap();
+
+        assert_eq!(store.count_latest_failed_compare_results().unwrap(), 1);
+        let logs = store.latest_failed_compare_logs().unwrap();
+        assert_eq!(logs.len(), 1);
+        assert!(logs[0].contains("NEW-1"));
+
+        let _ = std::fs::remove_file(path);
+    }
 }

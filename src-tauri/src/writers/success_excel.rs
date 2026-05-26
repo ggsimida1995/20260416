@@ -87,9 +87,9 @@ pub fn export_pending_success_rows(file_root: &Path) -> Result<SuccessExportResu
 pub fn export_error_records(file_root: &Path) -> Result<PathBuf> {
     let store = AppStateStore::new(workspace_state_db_path(file_root));
     let lines = store
-        .latest_runtime_logs(100_000)?
+        .latest_failed_compare_logs()?
         .into_iter()
-        .filter(|line| line.contains("[项目比对]") && line.contains("\"passed\":false"))
+        .map(|line| format!("[项目比对] {line}"))
         .collect::<Vec<_>>();
     let dir = export_dir(file_root);
     std::fs::create_dir_all(&dir)?;
