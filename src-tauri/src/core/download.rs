@@ -15,6 +15,8 @@ use std::time::Duration;
 const BASE_URL: &str = "https://www.hollysys.net";
 const BASE_HOST: &str = "www.hollysys.net";
 const HTTP_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36";
+const TODO_PAGE_SIZE: usize = 100;
+const TODO_MAX_PAGES: usize = 200;
 const AGGREGATION_CATEGORIES: [(&str, &str); 2] = [
     ("18a032b3695468f23f38a0f40d5a3602", "项目关闭工作流"),
     (
@@ -37,6 +39,13 @@ struct TodoItem {
     todo_fd_id: String,
     subject: String,
     detail_path: String,
+}
+
+#[derive(Debug, Clone)]
+struct TodoListPage {
+    items: Vec<TodoItem>,
+    total_count: Option<usize>,
+    total_pages: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -257,7 +266,7 @@ fn verify_session(client: &Client) -> Result<SessionIdentity> {
 }
 
 fn verify_session_once(client: &Client, category_id: &str) -> Result<SessionIdentity> {
-    let url = build_list_url(category_id);
+    let url = build_list_url(category_id, 1, TODO_PAGE_SIZE);
     let response = client.get(&url).send()?.error_for_status()?.text()?;
     if looks_like_login_page(&response) {
         bail!("Hollysys 会话已失效，请先在浏览器中重新登录");
@@ -307,8 +316,40 @@ fn fetch_todo_items(
     category_id: &str,
     category_name: &str,
 ) -> Result<Vec<TodoItem>> {
+    let mut items = Vec::new();
+    let mut seen = HashSet::new();
+    for page_no in 1..=TODO_MAX_PAGES {
+        let page = fetch_todo_items_page(client, category_id, category_name, page_no)?;
+        if page.items.is_empty() {
+            break;
+        }
+        let total_count = page.total_count;
+        let total_pages = page.total_pages;
+        let before_count = items.len();
+        for item in page.items {
+            let key = todo_item_key(&item);
+            if seen.insert(key) {
+                items.push(item);
+            }
+        }
+        if items.len() == before_count {
+            break;
+        }
+        if todo_pagination_complete(page_no, items.len(), total_count, total_pages) {
+            break;
+        }
+    }
+    Ok(items)
+}
+
+fn fetch_todo_items_page(
+    client: &Client,
+    category_id: &str,
+    category_name: &str,
+    page_no: usize,
+) -> Result<TodoListPage> {
     let response = client
-        .get(build_list_url(category_id))
+        .get(build_list_url(category_id, page_no, TODO_PAGE_SIZE))
         .send()?
         .error_for_status()?
         .text()?;
@@ -317,9 +358,17 @@ fn fetch_todo_items(
     }
     let payload: Value = serde_json::from_str(response.trim_start())
         .with_context(|| format!("待办列表返回不是 JSON，分类: {category_name}"))?;
+    Ok(parse_todo_list_page(&payload, category_name))
+}
+
+fn parse_todo_list_page(payload: &Value, category_name: &str) -> TodoListPage {
     let mut items = Vec::new();
     let Some(rows) = payload.get("datas").and_then(Value::as_array) else {
-        return Ok(items);
+        return TodoListPage {
+            items,
+            total_count: todo_numeric_field(payload, &["total", "totalCount", "recordCount", "records"]),
+            total_pages: todo_numeric_field(payload, &["totalPage", "totalPages", "pageCount"]),
+        };
     };
     for raw_row in rows {
         let row = list_row_to_map(raw_row);
@@ -343,7 +392,57 @@ fn fetch_todo_items(
             detail_path,
         });
     }
-    Ok(items)
+    TodoListPage {
+        items,
+        total_count: todo_numeric_field(payload, &["total", "totalCount", "recordCount", "records"]),
+        total_pages: todo_numeric_field(payload, &["totalPage", "totalPages", "pageCount"]),
+    }
+}
+
+fn todo_item_key(item: &TodoItem) -> String {
+    if !item.todo_fd_id.is_empty() {
+        return format!("id:{}", item.todo_fd_id);
+    }
+    format!("path:{}", item.detail_path)
+}
+
+fn todo_pagination_complete(
+    page_no: usize,
+    loaded_count: usize,
+    total_count: Option<usize>,
+    total_pages: Option<usize>,
+) -> bool {
+    if let Some(total_pages) = total_pages {
+        if total_pages > 0 && page_no >= total_pages {
+            return true;
+        }
+    }
+    if let Some(total_count) = total_count {
+        if total_count > 0 && loaded_count >= total_count {
+            return true;
+        }
+    }
+    false
+}
+
+fn todo_numeric_field(payload: &Value, keys: &[&str]) -> Option<usize> {
+    for key in keys {
+        if let Some(value) = payload.get(*key).and_then(value_to_usize) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn value_to_usize(value: &Value) -> Option<usize> {
+    value
+        .as_u64()
+        .and_then(|item| usize::try_from(item).ok())
+        .or_else(|| {
+            value
+                .as_str()
+                .and_then(|text| text.trim().parse::<usize>().ok())
+        })
 }
 
 fn fetch_detail_record(client: &Client, item: TodoItem) -> Result<DetailRecord> {
@@ -761,8 +860,8 @@ fn looks_like_placeholder_identity(value: &str) -> bool {
         || lower.starts_with("${")
 }
 
-fn build_list_url(category_id: &str) -> String {
-    format!("{BASE_URL}/sys/notify/sys_notify_todo/sysNotifyMainIndex.do?method=list&from=aggregation&dataType=todo&fdType=13&aggregationId={category_id}")
+fn build_list_url(category_id: &str, page_no: usize, page_size: usize) -> String {
+    format!("{BASE_URL}/sys/notify/sys_notify_todo/sysNotifyMainIndex.do?method=list&from=aggregation&dataType=todo&fdType=13&aggregationId={category_id}&pageno={page_no}&rowsize={page_size}&pageNo={page_no}&rowSize={page_size}&pageSize={page_size}")
 }
 
 impl TodoItem {
@@ -932,10 +1031,11 @@ fn json_contains_expired_signal(value: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        cookie_host_matches, extract_detail_field, extract_identity_from_text,
+        build_list_url, cookie_host_matches, extract_detail_field, extract_identity_from_text,
         extract_lui_user_name, extract_project_code, looks_like_login_page, normalize_project_code,
-        sanitize_filename,
+        parse_todo_list_page, sanitize_filename, todo_pagination_complete,
     };
+    use serde_json::json;
 
     #[test]
     fn extracts_lui_user_name_from_home_header() {
@@ -1028,5 +1128,41 @@ mod tests {
         assert_eq!(normalize_project_code("BHE-25090233/01|bad:name*"), "BHE-25090233-01-bad-name");
         assert_eq!(sanitize_filename(r#"竣工/验收:报告?.pdf"#), "竣工-验收-报告-.pdf");
         assert_eq!(sanitize_filename("CON"), "_CON");
+    }
+
+    #[test]
+    fn todo_list_url_contains_pagination_parameters() {
+        let url = build_list_url("category-id", 3, 100);
+
+        assert!(url.contains("aggregationId=category-id"));
+        assert!(url.contains("pageno=3"));
+        assert!(url.contains("rowsize=100"));
+        assert!(url.contains("pageNo=3"));
+    }
+
+    #[test]
+    fn parses_todo_list_page_metadata_and_rows() {
+        let payload = json!({
+            "total": "2",
+            "totalPage": 2,
+            "datas": [
+                [
+                    { "col": "fdId", "value": "todo-1" },
+                    { "col": "tr_href", "value": "/detail/1" },
+                    { "col": "todo.subject4View", "value": "<span>项目号：BHE-TEST/01</span>" }
+                ]
+            ]
+        });
+
+        let page = parse_todo_list_page(&payload, "项目关闭工作流");
+
+        assert_eq!(page.total_count, Some(2));
+        assert_eq!(page.total_pages, Some(2));
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].todo_fd_id, "todo-1");
+        assert_eq!(page.items[0].detail_path, "/detail/1");
+        assert_eq!(page.items[0].subject, "项目号：BHE-TEST/01");
+        assert!(!todo_pagination_complete(1, 1, page.total_count, page.total_pages));
+        assert!(todo_pagination_complete(2, 2, page.total_count, page.total_pages));
     }
 }
