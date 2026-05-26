@@ -233,6 +233,40 @@ export default function App() {
     if (!isTauriRuntime()) {
       return () => undefined;
     }
+    let unlisten: UnlistenFn | null = null;
+    let mounted = true;
+    void listen('auth://login-page-detected', () => {
+      if (!mounted || loginPollTimerRef.current !== null) {
+        return;
+      }
+      setState((previous) => previous ? {
+        ...previous,
+        session: {
+          state: 'missing',
+          message: '已跳转到登录页，请重新登录',
+          browserName: previous.session.browserName || '内置 WebView',
+          account: '',
+          displayName: '',
+          checkedAt: new Date().toLocaleString('zh-CN', { hour12: false })
+        }
+      } : previous);
+    }).then((handler) => {
+      if (mounted) {
+        unlisten = handler;
+      } else {
+        handler();
+      }
+    });
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return () => undefined;
+    }
     const id = window.setInterval(async () => {
       if (sessionStateRef.current !== 'ok') return;
       try {
@@ -415,6 +449,7 @@ export default function App() {
   async function openSessionPreviewWindow(): Promise<void> {
     try {
       await call<void>('open_session_preview_window');
+      void refreshSession(false);
     } catch (error) {
       showError(error);
     }
@@ -509,8 +544,9 @@ export default function App() {
     try {
       const nextSession = await call<SessionStatus>('check_session');
       if (nextSession.state !== 'ok') {
-        // 登录回调链上的中间态(POST 提交→302 重定向时 cookies 还在变),不要拿
-        // verify 失败覆盖已有的 ok 状态;真正失效靠手动刷新或 10 分钟保活兜底。
+        if (loginPollTimerRef.current === null) {
+          setState((previous) => previous ? { ...previous, session: nextSession } : previous);
+        }
         return;
       }
       const wasAlreadyOk = sessionStateRef.current === 'ok';

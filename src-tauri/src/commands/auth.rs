@@ -8,6 +8,8 @@ const PREVIEW_WINDOW_LABEL: &str = "session-preview";
 const HOLLYSYS_URL: &str = "https://www.hollysys.net/";
 const HOLLYSYS_HOST: &str = "www.hollysys.net";
 const HOLLYSYS_TODO_PREVIEW_URL: &str = "https://www.hollysys.net/sys/notify/sys_notify_todo/sysNotifyMainIndex.do?method=list&from=aggregation&dataType=todo&fdType=13&aggregationId=18a032b3695468f23f38a0f40d5a3602&pageno=1&rowsize=100&pageNo=1&rowSize=100&pageSize=100";
+const AUTH_COOKIES_UPDATED_EVENT: &str = "auth://cookies-updated";
+const AUTH_LOGIN_PAGE_DETECTED_EVENT: &str = "auth://login-page-detected";
 
 #[cfg(target_os = "windows")]
 const LOGIN_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36";
@@ -58,11 +60,15 @@ pub async fn open_login_window(app: AppHandle) -> Result<(), String> {
                     if let Some(script) = autofill_script.as_ref() {
                         let _ = window.eval(script);
                     }
+                    if is_login_url(payload.url().as_str()) {
+                        let _ = app_handle.emit(AUTH_LOGIN_PAGE_DETECTED_EVENT, ());
+                        return;
+                    }
                     if let Err(error) = capture_cookies(&window) {
                         eprintln!("[auth] capture cookies failed: {error}");
                         return;
                     }
-                    let _ = app_handle.emit("auth://cookies-updated", ());
+                    let _ = app_handle.emit(AUTH_COOKIES_UPDATED_EVENT, ());
                 })
                 .build()
                 .map_err(to_string)?;
@@ -105,11 +111,15 @@ pub async fn open_session_preview_window(app: AppHandle) -> Result<(), String> {
                 if payload.event() != PageLoadEvent::Finished {
                     return;
                 }
+                if is_login_url(payload.url().as_str()) {
+                    let _ = app_handle.emit(AUTH_LOGIN_PAGE_DETECTED_EVENT, ());
+                    return;
+                }
                 if let Err(error) = capture_cookies(&window) {
                     eprintln!("[auth] preview capture cookies failed: {error}");
                     return;
                 }
-                let _ = app_handle.emit("auth://cookies-updated", ());
+                let _ = app_handle.emit(AUTH_COOKIES_UPDATED_EVENT, ());
             })
             .build()
             .map_err(to_string)?;
@@ -273,6 +283,27 @@ fn cookie_domain_matches(cookie_domain: &str, request_host: &str) -> bool {
     request_host == stripped || request_host.ends_with(&format!(".{stripped}"))
 }
 
+fn is_login_url(url: &str) -> bool {
+    let lower = url.to_lowercase();
+    lower.contains("/login")
+        || lower.contains("login.jsp")
+        || lower.contains("login.do")
+        || lower.contains("login_error")
+}
+
 fn to_string(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_login_url;
+
+    #[test]
+    fn detects_hollysys_login_urls() {
+        assert!(is_login_url("https://www.hollysys.net/login.jsp"));
+        assert!(is_login_url("https://www.hollysys.net/j_acegi_security_check?login_error=1"));
+        assert!(is_login_url("https://sso.hollysys.net/login"));
+        assert!(!is_login_url("https://www.hollysys.net/sys/notify/sys_notify_todo/sysNotifyMainIndex.do"));
+    }
 }
